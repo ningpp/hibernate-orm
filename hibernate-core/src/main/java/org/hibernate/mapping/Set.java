@@ -85,6 +85,9 @@ public class Set extends Collection {
 			if ( pk == null ) {
 				pk = new PrimaryKey( getCollectionTable() );
 			}
+			if ( !pk.getColumns().isEmpty() ) {
+				return;
+			}
 			pk.addColumns( getKey() );
 			for ( Selectable selectable : getElement().getSelectables() ) {
 				if ( selectable instanceof Column ) {

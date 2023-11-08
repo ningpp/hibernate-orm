@@ -61,6 +61,11 @@ public abstract class IndexedCollection extends Collection {
 
 	void createPrimaryKey() {
 		if ( !isOneToMany() ) {
+			final Table collectionTable = getCollectionTable();
+			if ( collectionTable.getPrimaryKey() != null
+					&&!collectionTable.getPrimaryKey().getColumns().isEmpty() ) {
+				return;
+			}
 			PrimaryKey pk = new PrimaryKey( getCollectionTable() );
 			pk.addColumns( getKey() );
 
