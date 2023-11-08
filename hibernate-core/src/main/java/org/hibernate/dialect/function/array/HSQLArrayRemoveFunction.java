@@ -8,6 +8,7 @@ package org.hibernate.dialect.function.array;
 
 import java.util.List;
 
+import org.hibernate.query.ReturnableType;
 import org.hibernate.sql.ast.SqlAstTranslator;
 import org.hibernate.sql.ast.spi.SqlAppender;
 import org.hibernate.sql.ast.tree.SqlAstNode;
@@ -25,12 +26,13 @@ public class HSQLArrayRemoveFunction extends AbstractArrayRemoveFunction {
 	public void render(
 			SqlAppender sqlAppender,
 			List<? extends SqlAstNode> sqlAstArguments,
+			ReturnableType<?> returnType,
 			SqlAstTranslator<?> walker) {
 		final Expression arrayExpression = (Expression) sqlAstArguments.get( 0 );
 		final Expression elementExpression = (Expression) sqlAstArguments.get( 1 );
 		sqlAppender.append( "case when ");
 		arrayExpression.accept( walker );
-		sqlAppender.append( " is null then null else coalesce((select array_agg(t.val) from unnest(" );
+		sqlAppender.append( " is not null then coalesce((select array_agg(t.val) from unnest(" );
 		arrayExpression.accept( walker );
 		sqlAppender.append( ") with ordinality t(val,idx) where t.val is distinct from " );
 		elementExpression.accept( walker );

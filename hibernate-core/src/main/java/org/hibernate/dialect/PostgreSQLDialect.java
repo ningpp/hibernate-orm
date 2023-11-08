@@ -629,25 +629,30 @@ public class PostgreSQLDialect extends Dialect {
 		functionFactory.locate_positionSubstring();
 		functionFactory.windowFunctions();
 		functionFactory.listagg_stringAgg( "varchar" );
-		functionFactory.array_casting();
+		functionFactory.array_postgresql();
 		functionFactory.arrayAggregate();
-		functionFactory.arrayContains_operator();
-		functionFactory.arrayContainsNull_array_position();
 		functionFactory.arrayPosition_postgresql();
+		functionFactory.arrayPositions_postgresql();
 		functionFactory.arrayLength_cardinality();
 		functionFactory.arrayConcat_postgresql();
 		functionFactory.arrayPrepend_postgresql();
 		functionFactory.arrayAppend_postgresql();
-		functionFactory.arrayContainsAll_operator();
-		functionFactory.arrayContainsAny_operator();
-		functionFactory.arrayContainsAllNullable_operator();
-		functionFactory.arrayContainsAnyNullable_operator();
+		functionFactory.arrayContains_postgresql();
+		functionFactory.arrayOverlaps_postgresql();
 		functionFactory.arrayGet_bracket();
 		functionFactory.arraySet_unnest();
 		functionFactory.arrayRemove();
 		functionFactory.arrayRemoveIndex_unnest( true );
 		functionFactory.arraySlice_operator();
 		functionFactory.arrayReplace();
+		if ( getVersion().isSameOrAfter( 14 ) ) {
+			functionFactory.arrayTrim_trim_array();
+		}
+		else {
+			functionFactory.arrayTrim_unnest();
+		}
+		functionFactory.arrayFill_postgresql();
+		functionFactory.arrayToString_postgresql();
 
 		functionFactory.makeDateTimeTimestamp();
 		// Note that PostgreSQL doesn't support the OVER clause for ordered set-aggregate functions

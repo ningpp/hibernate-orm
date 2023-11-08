@@ -8,6 +8,7 @@ package org.hibernate.dialect.function.array;
 
 import java.util.List;
 
+import org.hibernate.query.ReturnableType;
 import org.hibernate.sql.ast.SqlAstTranslator;
 import org.hibernate.sql.ast.spi.SqlAppender;
 import org.hibernate.sql.ast.tree.SqlAstNode;
@@ -27,6 +28,7 @@ public class HSQLArrayPositionFunction extends AbstractArrayPositionFunction {
 	public void render(
 			SqlAppender sqlAppender,
 			List<? extends SqlAstNode> sqlAstArguments,
+			ReturnableType<?> returnType,
 			SqlAstTranslator<?> walker) {
 		final Expression arrayExpression = (Expression) sqlAstArguments.get( 0 );
 		final Expression elementExpression = (Expression) sqlAstArguments.get( 1 );
@@ -40,6 +42,6 @@ public class HSQLArrayPositionFunction extends AbstractArrayPositionFunction {
 			sqlAppender.append( " and t.idx>=" );
 			sqlAstArguments.get( 2 ).accept( walker );
 		}
-		sqlAppender.append( "),0) end" );
+		sqlAppender.append( " order by t.idx fetch first 1 row only),0) end" );
 	}
 }

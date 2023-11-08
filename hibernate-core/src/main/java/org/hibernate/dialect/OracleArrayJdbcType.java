@@ -284,10 +284,10 @@ public class OracleArrayJdbcType extends ArrayJdbcType {
 		);
 		database.addAuxiliaryDatabaseObject(
 				new NamedAuxiliaryDatabaseObject(
-						arrayTypeName + "_contains_all",
+						arrayTypeName + "_contains",
 						database.getDefaultNamespace(),
 						new String[]{
-								"create or replace function " + arrayTypeName + "_contains_all(haystack in " + arrayTypeName +
+								"create or replace function " + arrayTypeName + "_contains(haystack in " + arrayTypeName +
 										", needle in " + arrayTypeName + ", nullable in number) return number deterministic is found number(1,0); begin " +
 										"if haystack is null or needle is null then return null; end if; " +
 										"for i in 1 .. needle.count loop " +
@@ -300,17 +300,17 @@ public class OracleArrayJdbcType extends ArrayJdbcType {
 										"return 1; " +
 										"end;"
 						},
-						new String[] { "drop function " + arrayTypeName + "_contains_all" },
+						new String[] { "drop function " + arrayTypeName + "_contains" },
 						emptySet(),
 						false
 				)
 		);
 		database.addAuxiliaryDatabaseObject(
 				new NamedAuxiliaryDatabaseObject(
-						arrayTypeName + "_contains_any",
+						arrayTypeName + "_overlaps",
 						database.getDefaultNamespace(),
 						new String[]{
-								"create or replace function " + arrayTypeName + "_contains_any(haystack in " + arrayTypeName +
+								"create or replace function " + arrayTypeName + "_overlaps(haystack in " + arrayTypeName +
 										", needle in " + arrayTypeName + ", nullable in number) return number deterministic is begin " +
 										"if haystack is null or needle is null then return null; end if; " +
 										"if needle.count = 0 then return 1; end if; " +
@@ -322,7 +322,7 @@ public class OracleArrayJdbcType extends ArrayJdbcType {
 										"return 0; " +
 										"end;"
 						},
-						new String[] { "drop function " + arrayTypeName + "_contains_any" },
+						new String[] { "drop function " + arrayTypeName + "_overlaps" },
 						emptySet(),
 						false
 				)
@@ -467,6 +467,99 @@ public class OracleArrayJdbcType extends ArrayJdbcType {
 										"end;"
 						},
 						new String[] { "drop function " + arrayTypeName + "_replace" },
+						emptySet(),
+						false
+				)
+		);
+		database.addAuxiliaryDatabaseObject(
+				new NamedAuxiliaryDatabaseObject(
+						arrayTypeName + "_trim",
+						database.getDefaultNamespace(),
+						new String[]{
+								"create or replace function " + arrayTypeName + "_trim(arr in " + arrayTypeName +
+										", elems number) return " + arrayTypeName + " deterministic is " +
+										"res " + arrayTypeName + ":=" + arrayTypeName + "(); begin " +
+										"if arr is null or elems is null then return null; end if; " +
+										"if arr.count < elems then raise_application_error (-20000, 'number of elements to trim must be between 0 and '||arr.count); end if;" +
+										"for i in 1 .. arr.count-elems loop " +
+										"res.extend; " +
+										"res(i) := arr(i); " +
+										"end loop; " +
+										"return res; " +
+										"end;"
+						},
+						new String[] { "drop function " + arrayTypeName + "_trim" },
+						emptySet(),
+						false
+				)
+		);
+		database.addAuxiliaryDatabaseObject(
+				new NamedAuxiliaryDatabaseObject(
+						arrayTypeName + "_fill",
+						database.getDefaultNamespace(),
+						new String[]{
+								"create or replace function " + arrayTypeName + "_fill(elem in " + getRawTypeName( elementType ) +
+										", elems number) return " + arrayTypeName + " deterministic is " +
+										"res " + arrayTypeName + ":=" + arrayTypeName + "(); begin " +
+										"if elems is null then return null; end if; " +
+										"if elems<0 then raise_application_error (-20000, 'number of elements must be greater than or equal to 0'); end if;" +
+										"for i in 1 .. elems loop " +
+										"res.extend; " +
+										"res(i) := elem; " +
+										"end loop; " +
+										"return res; " +
+										"end;"
+						},
+						new String[] { "drop function " + arrayTypeName + "_fill" },
+						emptySet(),
+						false
+				)
+		);
+		database.addAuxiliaryDatabaseObject(
+				new NamedAuxiliaryDatabaseObject(
+						arrayTypeName + "_positions",
+						database.getDefaultNamespace(),
+						new String[]{
+								"create or replace function " + arrayTypeName + "_positions(arr in " + arrayTypeName +
+										", elem in " + getRawTypeName( elementType ) + ") return sdo_ordinate_array deterministic is " +
+										"res sdo_ordinate_array:=sdo_ordinate_array(); begin " +
+										"if arr is null then return null; end if; " +
+										"if elem is null then " +
+										"for i in 1 .. arr.count loop " +
+										"if arr(i) is null then res.extend; res(res.last):=i; end if; " +
+										"end loop; " +
+										"else " +
+										"for i in 1 .. arr.count loop " +
+										"if arr(i)=elem then res.extend; res(res.last):=i; end if; " +
+										"end loop; " +
+										"end if; " +
+										"return res; " +
+										"end;"
+						},
+						new String[] { "drop function " + arrayTypeName + "_positions" },
+						emptySet(),
+						false
+				)
+		);
+		database.addAuxiliaryDatabaseObject(
+				new NamedAuxiliaryDatabaseObject(
+						arrayTypeName + "_to_string",
+						database.getDefaultNamespace(),
+						new String[]{
+								"create or replace function " + arrayTypeName + "_to_string(arr in " + arrayTypeName +
+										", sep in varchar2) return varchar2 deterministic is " +
+										"res varchar2(4000):=''; begin " +
+										"if arr is null or sep is null then return null; end if; " +
+										"for i in 1 .. arr.count loop " +
+										"if arr(i) is not null then " +
+										"if length(res)<>0 then res:=res||sep; end if; " +
+										"res:=res||arr(i); " +
+										"end if; " +
+										"end loop; " +
+										"return res; " +
+										"end;"
+						},
+						new String[] { "drop function " + arrayTypeName + "_to_string" },
 						emptySet(),
 						false
 				)

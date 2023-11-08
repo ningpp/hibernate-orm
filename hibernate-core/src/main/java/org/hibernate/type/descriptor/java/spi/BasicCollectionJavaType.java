@@ -87,6 +87,12 @@ public class BasicCollectionJavaType<C extends Collection<E>, E> extends Abstrac
 	}
 
 	@Override
+	public boolean isWider(JavaType<?> javaType) {
+		// Support binding single element value
+		return this == javaType || componentJavaType == javaType;
+	}
+
+	@Override
 	public BasicType<?> resolveType(
 			TypeConfiguration typeConfiguration,
 			Dialect dialect,
@@ -455,6 +461,13 @@ public class BasicCollectionJavaType<C extends Collection<E>, E> extends Abstrac
 			for ( int i = 0; i < length; i++ ) {
 				wrapped.add( componentJavaType.wrap( Array.get( value, i ), options ) );
 			}
+			return wrapped;
+		}
+		else if ( getElementJavaType().isInstance( value ) ) {
+			// Support binding a single element as parameter value
+			final C wrapped = semantics.instantiateRaw( 1, null );
+			//noinspection unchecked
+			wrapped.add( (E) value );
 			return wrapped;
 		}
 

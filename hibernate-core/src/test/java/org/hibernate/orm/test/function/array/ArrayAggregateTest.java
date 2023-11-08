@@ -15,9 +15,11 @@ import org.hibernate.boot.spi.InFlightMetadataCollector;
 import org.hibernate.boot.spi.MetadataBuildingContext;
 import org.hibernate.cfg.AvailableSettings;
 import org.hibernate.dialect.OracleArrayJdbcType;
-import org.hibernate.dialect.OracleDialect;
 import org.hibernate.dialect.SpannerDialect;
 import org.hibernate.engine.jdbc.Size;
+import org.hibernate.query.criteria.JpaCriteriaQuery;
+import org.hibernate.query.criteria.JpaRoot;
+import org.hibernate.query.sqm.NodeBuilder;
 import org.hibernate.type.SqlTypes;
 import org.hibernate.type.descriptor.java.ArrayJavaType;
 import org.hibernate.type.descriptor.java.spi.JavaTypeRegistry;
@@ -60,7 +62,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 @SessionFactory
 @RequiresDialectFeature(feature = DialectFeatureChecks.SupportsStructuralArrays.class)
 @SkipForDialect(dialectClass = SpannerDialect.class, reason = "Doesn't support array_agg ordering yet")
-@SkipForDialect(dialectClass = OracleDialect.class, majorVersion = 11, reason = "Oracle array_agg emulation requires json_arrayagg which was only added in Oracle 12")
 public class ArrayAggregateTest {
 
 	public static class UdtContributor implements AdditionalMappingContributor {
@@ -109,8 +110,10 @@ public class ArrayAggregateTest {
 	@Test
 	public void testEmpty(SessionFactoryScope scope) {
 		scope.inSession( em -> {
+			//tag::hql-array-agg-example[]
 			List<String[]> results = em.createQuery( "select array_agg(e.data) within group (order by e.id) from BasicEntity e", String[].class )
 					.getResultList();
+			//end::hql-array-agg-example[]
 			assertEquals( 1, results.size() );
 			assertNull( results.get( 0 ) );
 		} );
@@ -142,6 +145,19 @@ public class ArrayAggregateTest {
 			List<String[]> results = em.createQuery( "select 1 where array('abc','def',null) is not distinct from (select array_agg(e.theString) within group (order by e.theString asc nulls last) from EntityOfBasics e)", String[].class )
 					.getResultList();
 			assertEquals( 1, results.size() );
+		} );
+	}
+
+	@Test
+	public void testNodeBuilder(SessionFactoryScope scope) {
+		scope.inSession( em -> {
+			final NodeBuilder cb = (NodeBuilder) em.getCriteriaBuilder();
+			final JpaCriteriaQuery<String[]> cq = cb.createQuery( String[].class );
+			final JpaRoot<EntityOfBasics> root = cq.from( EntityOfBasics.class );
+			cq.select( cb.arrayAgg( cb.asc( root.get( "theString" ), false ), root.get( "theString" ) ) );
+			List<String[]> results = em.createQuery( cq ).getResultList();
+			assertEquals( 1, results.size() );
+			assertArrayEquals( new String[]{ "abc", "def", null }, results.get( 0 ) );
 		} );
 	}
 

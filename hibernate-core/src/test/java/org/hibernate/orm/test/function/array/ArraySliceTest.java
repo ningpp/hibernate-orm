@@ -6,9 +6,14 @@
  */
 package org.hibernate.orm.test.function.array;
 
+import java.util.Collection;
 import java.util.List;
 
 import org.hibernate.cfg.AvailableSettings;
+import org.hibernate.dialect.CockroachDialect;
+import org.hibernate.query.criteria.JpaCriteriaQuery;
+import org.hibernate.query.criteria.JpaRoot;
+import org.hibernate.query.sqm.NodeBuilder;
 
 import org.hibernate.testing.orm.junit.DialectFeatureChecks;
 import org.hibernate.testing.orm.junit.DomainModel;
@@ -17,6 +22,7 @@ import org.hibernate.testing.orm.junit.ServiceRegistry;
 import org.hibernate.testing.orm.junit.SessionFactory;
 import org.hibernate.testing.orm.junit.SessionFactoryScope;
 import org.hibernate.testing.orm.junit.Setting;
+import org.hibernate.testing.orm.junit.SkipForDialect;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 // otherwise we might run into ORA-21700: object does not exist or is marked for delete
 // because the JDBC connection or database session caches something that should have been invalidated
 @ServiceRegistry(settings = @Setting(name = AvailableSettings.CONNECTION_PROVIDER, value = ""))
+@SkipForDialect(dialectClass = CockroachDialect.class, reason = "See https://github.com/cockroachdb/cockroach/issues/32551")
 public class ArraySliceTest {
 
 	@BeforeEach
@@ -99,6 +106,40 @@ public class ArraySliceTest {
 			assertArrayEquals( new String[0], results.get( 1 ).get( 1, String[].class ) );
 			assertEquals( 3L, results.get( 2 ).get( 0 ) );
 			assertNull( results.get( 2 ).get( 1, String[].class ) );
+		} );
+	}
+
+	@Test
+	public void testNodeBuilderArray(SessionFactoryScope scope) {
+		scope.inSession( em -> {
+			final NodeBuilder cb = (NodeBuilder) em.getCriteriaBuilder();
+			final JpaCriteriaQuery<Tuple> cq = cb.createTupleQuery();
+			final JpaRoot<EntityWithArrays> root = cq.from( EntityWithArrays.class );
+			cq.multiselect(
+					root.get( "id" ),
+					cb.arraySlice( root.get( "theArray" ), cb.literal( 1 ), cb.literal( 1 ) ),
+					cb.arraySlice( root.get( "theArray" ), cb.literal( 1 ), 1 ),
+					cb.arraySlice( root.get( "theArray" ), 1, cb.literal( 1 ) ),
+					cb.arraySlice( root.get( "theArray" ), 1, 1 )
+			);
+			em.createQuery( cq ).getResultList();
+		} );
+	}
+
+	@Test
+	public void testNodeBuilderCollection(SessionFactoryScope scope) {
+		scope.inSession( em -> {
+			final NodeBuilder cb = (NodeBuilder) em.getCriteriaBuilder();
+			final JpaCriteriaQuery<Tuple> cq = cb.createTupleQuery();
+			final JpaRoot<EntityWithArrays> root = cq.from( EntityWithArrays.class );
+			cq.multiselect(
+					root.get( "id" ),
+					cb.collectionSlice( root.get( "theCollection" ), cb.literal( 1 ), cb.literal( 1 ) ),
+					cb.collectionSlice( root.get( "theCollection" ), cb.literal( 1 ), 1 ),
+					cb.collectionSlice( root.get( "theCollection" ), 1, cb.literal( 1 ) ),
+					cb.collectionSlice( root.get( "theCollection" ), 1, 1 )
+			);
+			em.createQuery( cq ).getResultList();
 		} );
 	}
 

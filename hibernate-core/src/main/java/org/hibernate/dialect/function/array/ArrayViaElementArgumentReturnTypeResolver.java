@@ -24,9 +24,18 @@ import org.hibernate.type.spi.TypeConfiguration;
  */
 public class ArrayViaElementArgumentReturnTypeResolver implements FunctionReturnTypeResolver {
 
-	public static final FunctionReturnTypeResolver INSTANCE = new ArrayViaElementArgumentReturnTypeResolver();
+	public static final FunctionReturnTypeResolver DEFAULT_INSTANCE = new ArrayViaElementArgumentReturnTypeResolver( false, 0  );
 
-	private ArrayViaElementArgumentReturnTypeResolver() {
+	public static final FunctionReturnTypeResolver DEFAULT_LIST_INSTANCE = new ArrayViaElementArgumentReturnTypeResolver( true, 0  );
+	public static final FunctionReturnTypeResolver VARARGS_INSTANCE = new ArrayViaElementArgumentReturnTypeResolver( false, -1  );
+	public static final FunctionReturnTypeResolver VARARGS_LIST_INSTANCE = new ArrayViaElementArgumentReturnTypeResolver( true, -1  );
+
+	private final boolean list;
+	private final int elementIndex;
+
+	private ArrayViaElementArgumentReturnTypeResolver(boolean list, int elementIndex) {
+		this.list = list;
+		this.elementIndex = elementIndex;
 	}
 
 	@Override
@@ -47,10 +56,22 @@ public class ArrayViaElementArgumentReturnTypeResolver implements FunctionReturn
 		if ( impliedType != null ) {
 			return impliedType;
 		}
-		for ( SqmTypedNode<?> argument : arguments ) {
-			final DomainType<?> sqmType = argument.getExpressible().getSqmType();
+		if ( elementIndex == -1 ) {
+			for ( SqmTypedNode<?> argument : arguments ) {
+				final DomainType<?> sqmType = argument.getExpressible().getSqmType();
+				if ( sqmType instanceof ReturnableType<?> ) {
+					return list
+							? DdlTypeHelper.resolveListType( sqmType, typeConfiguration )
+							: DdlTypeHelper.resolveArrayType( sqmType, typeConfiguration );
+				}
+			}
+		}
+		else {
+			final DomainType<?> sqmType = arguments.get( elementIndex ).getExpressible().getSqmType();
 			if ( sqmType instanceof ReturnableType<?> ) {
-				return DdlTypeHelper.resolveArrayType( sqmType, typeConfiguration );
+				return list
+						? DdlTypeHelper.resolveListType( sqmType, typeConfiguration )
+						: DdlTypeHelper.resolveArrayType( sqmType, typeConfiguration );
 			}
 		}
 		return null;

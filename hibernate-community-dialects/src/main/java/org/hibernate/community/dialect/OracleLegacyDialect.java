@@ -285,23 +285,23 @@ public class OracleLegacyDialect extends Dialect {
 
 		functionFactory.array_oracle();
 		functionFactory.arrayAggregate_jsonArrayagg();
-		functionFactory.arrayContains_oracle();
-		functionFactory.arrayContainsNull_oracle();
 		functionFactory.arrayPosition_oracle();
+		functionFactory.arrayPositions_oracle();
 		functionFactory.arrayLength_oracle();
 		functionFactory.arrayConcat_oracle();
 		functionFactory.arrayPrepend_oracle();
 		functionFactory.arrayAppend_oracle();
-		functionFactory.arrayContainsAll_oracle();
-		functionFactory.arrayContainsAny_oracle();
-		functionFactory.arrayContainsAllNullable_oracle();
-		functionFactory.arrayContainsAnyNullable_oracle();
+		functionFactory.arrayContains_oracle();
+		functionFactory.arrayOverlaps_oracle();
 		functionFactory.arrayGet_oracle();
 		functionFactory.arraySet_oracle();
 		functionFactory.arrayRemove_oracle();
 		functionFactory.arrayRemoveIndex_oracle();
 		functionFactory.arraySlice_oracle();
 		functionFactory.arrayReplace_oracle();
+		functionFactory.arrayTrim_oracle();
+		functionFactory.arrayFill_oracle();
+		functionFactory.arrayToString_oracle();
 	}
 
 	@Override

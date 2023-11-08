@@ -8,6 +8,7 @@ package org.hibernate.dialect.function.array;
 
 import java.util.List;
 
+import org.hibernate.query.ReturnableType;
 import org.hibernate.query.sqm.function.AbstractSqmSelfRenderingFunctionDescriptor;
 import org.hibernate.query.sqm.produce.function.StandardArgumentsValidators;
 import org.hibernate.sql.ast.SqlAstTranslator;
@@ -36,13 +37,14 @@ public class ArrayReplaceUnnestFunction extends AbstractSqmSelfRenderingFunction
 	public void render(
 			SqlAppender sqlAppender,
 			List<? extends SqlAstNode> sqlAstArguments,
+			ReturnableType<?> returnType,
 			SqlAstTranslator<?> walker) {
 		final Expression arrayExpression = (Expression) sqlAstArguments.get( 0 );
 		final Expression oldExpression = (Expression) sqlAstArguments.get( 1 );
 		final Expression newExpression = (Expression) sqlAstArguments.get( 2 );
 		sqlAppender.append( "case when ");
 		arrayExpression.accept( walker );
-		sqlAppender.append( " is null then null else coalesce((select array_agg(case when t.val is not distinct from " );
+		sqlAppender.append( " is not null then coalesce((select array_agg(case when t.val is not distinct from " );
 		oldExpression.accept( walker );
 		sqlAppender.append( " then " );
 		newExpression.accept( walker );

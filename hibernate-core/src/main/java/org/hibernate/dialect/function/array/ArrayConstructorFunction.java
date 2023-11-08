@@ -10,6 +10,7 @@ import java.util.List;
 
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.metamodel.mapping.JdbcMappingContainer;
+import org.hibernate.query.ReturnableType;
 import org.hibernate.query.sqm.SqmExpressible;
 import org.hibernate.query.sqm.function.AbstractSqmSelfRenderingFunctionDescriptor;
 import org.hibernate.query.sqm.internal.TypecheckUtil;
@@ -28,18 +29,24 @@ public class ArrayConstructorFunction extends AbstractSqmSelfRenderingFunctionDe
 
 	private final boolean withKeyword;
 
-	public ArrayConstructorFunction(boolean withKeyword) {
+	public ArrayConstructorFunction(boolean list, boolean withKeyword) {
 		super(
-				"array",
+				"array" + ( list ? "_list" : "" ),
 				ArrayConstructorArgumentsValidator.INSTANCE,
-				ArrayViaElementArgumentReturnTypeResolver.INSTANCE,
+				list
+						? ArrayViaElementArgumentReturnTypeResolver.VARARGS_LIST_INSTANCE
+						: ArrayViaElementArgumentReturnTypeResolver.VARARGS_INSTANCE,
 				StandardFunctionArgumentTypeResolvers.NULL
 		);
 		this.withKeyword = withKeyword;
 	}
 
 	@Override
-	public void render(SqlAppender sqlAppender, List<? extends SqlAstNode> arguments, SqlAstTranslator<?> walker) {
+	public void render(
+			SqlAppender sqlAppender,
+			List<? extends SqlAstNode> arguments,
+			ReturnableType<?> returnType,
+			SqlAstTranslator<?> walker) {
 		if ( withKeyword ) {
 			sqlAppender.append( "array" );
 		}

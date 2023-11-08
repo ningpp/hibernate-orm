@@ -8,7 +8,11 @@ package org.hibernate.dialect.function.array;
 
 import java.util.List;
 
-import org.hibernate.metamodel.mapping.JdbcMapping;
+import org.hibernate.engine.jdbc.Size;
+import org.hibernate.metamodel.mapping.JdbcMappingContainer;
+import org.hibernate.metamodel.mapping.SqlTypedMapping;
+import org.hibernate.query.ReturnableType;
+import org.hibernate.sql.ast.SqlAstNodeRenderingMode;
 import org.hibernate.sql.ast.SqlAstTranslator;
 import org.hibernate.sql.ast.spi.SqlAppender;
 import org.hibernate.sql.ast.tree.SqlAstNode;
@@ -30,6 +34,7 @@ public class PostgreSQLArrayConcatElementFunction extends ArrayConcatElementFunc
 	public void render(
 			SqlAppender sqlAppender,
 			List<? extends SqlAstNode> sqlAstArguments,
+			ReturnableType<?> returnType,
 			SqlAstTranslator<?> walker) {
 		final Expression firstArgument = (Expression) sqlAstArguments.get( 0 );
 		final Expression secondArgument = (Expression) sqlAstArguments.get( 1 );
@@ -45,44 +50,40 @@ public class PostgreSQLArrayConcatElementFunction extends ArrayConcatElementFunc
 		}
 		final String elementCastType;
 		if ( needsElementCasting( elementArgument ) ) {
-			final JdbcMapping elementType = elementArgument.getExpressionType().getSingleJdbcMapping();
-			if ( elementType instanceof BottomType  ) {
-				elementCastType = DdlTypeHelper.getCastTypeName(
-						( (BasicPluralType<?, ?>) arrayArgument.getExpressionType().getSingleJdbcMapping() )
-								.getElementType(),
-						walker
-				);
-			}
-			else {
-				elementCastType = DdlTypeHelper.getCastTypeName( elementType, walker );
-			}
+			final JdbcMappingContainer arrayType = arrayArgument.getExpressionType();
+			final Size size = arrayType instanceof SqlTypedMapping ? ( (SqlTypedMapping) arrayType ).toSize() : null;
+			elementCastType = DdlTypeHelper.getCastTypeName(
+					( (BasicPluralType<?, ?>) returnType ).getElementType(),
+					size,
+					walker.getSessionFactory().getTypeConfiguration()
+			);
 		}
 		else {
 			elementCastType = null;
 		}
 		sqlAppender.append( "case when " );
-		arrayArgument.accept( walker );
+		walker.render( arrayArgument, SqlAstNodeRenderingMode.DEFAULT );
 		sqlAppender.append( " is not null then " );
 		if ( prepend && elementCastType != null) {
 			sqlAppender.append( "cast(" );
-			firstArgument.accept( walker );
+			walker.render( firstArgument, SqlAstNodeRenderingMode.DEFAULT );
 			sqlAppender.append( " as " );
 			sqlAppender.append( elementCastType );
 			sqlAppender.append( ')' );
 		}
 		else {
-			firstArgument.accept( walker );
+			walker.render( firstArgument, SqlAstNodeRenderingMode.DEFAULT );
 		}
 		sqlAppender.append( "||" );
 		if ( !prepend && elementCastType != null) {
 			sqlAppender.append( "cast(" );
-			secondArgument.accept( walker );
+			walker.render( secondArgument, SqlAstNodeRenderingMode.DEFAULT );
 			sqlAppender.append( " as " );
 			sqlAppender.append( elementCastType );
 			sqlAppender.append( ')' );
 		}
 		else {
-			secondArgument.accept( walker );
+			walker.render( secondArgument, SqlAstNodeRenderingMode.DEFAULT );
 		}
 		sqlAppender.append( " end" );
 	}

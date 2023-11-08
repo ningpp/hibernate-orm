@@ -8,6 +8,7 @@ package org.hibernate.dialect.function.array;
 
 import java.util.List;
 
+import org.hibernate.query.ReturnableType;
 import org.hibernate.query.sqm.function.AbstractSqmSelfRenderingFunctionDescriptor;
 import org.hibernate.query.sqm.produce.function.ArgumentTypesValidator;
 import org.hibernate.query.sqm.produce.function.StandardArgumentsValidators;
@@ -47,19 +48,23 @@ public class ArrayRemoveIndexUnnestFunction extends AbstractSqmSelfRenderingFunc
 	public void render(
 			SqlAppender sqlAppender,
 			List<? extends SqlAstNode> sqlAstArguments,
+			ReturnableType<?> returnType,
 			SqlAstTranslator<?> walker) {
 		final Expression arrayExpression = (Expression) sqlAstArguments.get( 0 );
 		final Expression indexExpression = (Expression) sqlAstArguments.get( 1 );
 		sqlAppender.append( "case when ");
 		arrayExpression.accept( walker );
-		sqlAppender.append( " is null then null else coalesce((select array_agg(t.val) from unnest(" );
+		sqlAppender.append( " is not null then coalesce((select array_agg(t.val) from unnest(" );
 		arrayExpression.accept( walker );
 		sqlAppender.append( ") with ordinality t(val,idx) where t.idx is distinct from " );
 		indexExpression.accept( walker );
 		sqlAppender.append( "),");
 		if ( castEmptyArrayLiteral ) {
 			sqlAppender.append( "cast(array[] as " );
-			sqlAppender.append( DdlTypeHelper.getCastTypeName( arrayExpression.getExpressionType(), walker ) );
+			sqlAppender.append( DdlTypeHelper.getCastTypeName(
+					returnType,
+					walker.getSessionFactory().getTypeConfiguration()
+			) );
 			sqlAppender.append( ')' );
 		}
 		else {
