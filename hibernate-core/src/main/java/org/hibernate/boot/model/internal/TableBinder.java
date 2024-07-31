@@ -22,6 +22,7 @@ import org.hibernate.boot.spi.InFlightMetadataCollector;
 import org.hibernate.boot.spi.MetadataBuildingContext;
 import org.hibernate.dialect.Dialect;
 import org.hibernate.internal.CoreMessageLogger;
+import org.hibernate.mapping.Any;
 import org.hibernate.mapping.Collection;
 import org.hibernate.mapping.Column;
 import org.hibernate.mapping.Component;
@@ -568,7 +569,7 @@ public class TableBinder {
 		}
 		value.createForeignKey( referencedEntity, joinColumns );
 		if ( unique ) {
-			value.createUniqueKey();
+			value.createUniqueKey( buildingContext );
 		}
 	}
 
@@ -743,9 +744,10 @@ public class TableBinder {
 			PersistentClass referencedEntity,
 			AnnotatedJoinColumns joinColumns,
 			SimpleValue value) {
-		final List<Column> idColumns = referencedEntity instanceof JoinedSubclass
-				? referencedEntity.getKey().getColumns()
-				: referencedEntity.getIdentifier().getColumns();
+		final KeyValue keyValue = referencedEntity instanceof JoinedSubclass
+				? referencedEntity.getKey()
+				: referencedEntity.getIdentifier();
+		final List<Column> idColumns = keyValue.getColumns();
 		for ( int i = 0; i < idColumns.size(); i++ ) {
 			final Column column = idColumns.get(i);
 			final AnnotatedJoinColumn firstColumn = joinColumns.getJoinColumns().get(0);
@@ -766,6 +768,11 @@ public class TableBinder {
 					}
 				}
 			}
+		}
+		if ( keyValue instanceof Component
+				&& ( (Component) keyValue ).isSorted()
+				&& value instanceof DependantValue ) {
+			( (DependantValue) value ).setSorted( true );
 		}
 	}
 
@@ -791,6 +798,9 @@ public class TableBinder {
 						+ associatedClass.getEntityName() + "." + mappedByProperty + "' specify 'mappedBy'" );
 			}
 			return element.getColumns();
+		}
+		else if (value instanceof Any) {
+			return ( (Any) value ).getKeyDescriptor().getColumns();
 		}
 		else {
 			return value.getColumns();

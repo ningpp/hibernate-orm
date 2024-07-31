@@ -47,7 +47,7 @@ public class IntegerJavaType extends AbstractClassJavaType<Integer>
 		if ( value == null ) {
 			return null;
 		}
-		if ( Integer.class.isAssignableFrom( type ) ) {
+		if ( Integer.class.isAssignableFrom( type ) || type == Object.class ) {
 			return (X) value;
 		}
 		if ( Byte.class.isAssignableFrom( type ) ) {
@@ -96,7 +96,7 @@ public class IntegerJavaType extends AbstractClassJavaType<Integer>
 
 	@Override
 	public boolean isWider(JavaType<?> javaType) {
-		switch ( javaType.getJavaType().getTypeName() ) {
+		switch ( javaType.getTypeName() ) {
 			case "byte":
 			case "java.lang.Byte":
 			case "short":

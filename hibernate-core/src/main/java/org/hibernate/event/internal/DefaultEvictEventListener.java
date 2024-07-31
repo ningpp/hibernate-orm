@@ -41,6 +41,7 @@ public class DefaultEvictEventListener implements EvictEventListener {
 	 * @param event The evict event to be handled.
 	 *
 	 */
+	@Override
 	public void onEvict(EvictEvent event) throws HibernateException {
 		final EventSource source = event.getSession();
 		final PersistenceContext persistenceContext = source.getPersistenceContextInternal();
@@ -59,7 +60,8 @@ public class DefaultEvictEventListener implements EvictEventListener {
 					.getEntityDescriptor( lazyInitializer.getEntityName() );
 			final EntityKey key = source.generateEntityKey( id, persister );
 			final EntityHolder holder = persistenceContext.removeEntityHolder( key );
-			if ( !lazyInitializer.isUninitialized() ) {
+			// if the entity has been evicted then its holder is null
+			if ( holder != null && !lazyInitializer.isUninitialized() ) {
 				final Object entity = holder.getEntity();
 				if ( entity != null ) {
 					EntityEntry entry = persistenceContext.removeEntry( entity );
@@ -126,7 +128,7 @@ public class DefaultEvictEventListener implements EvictEventListener {
 		// This is now handled by removeEntity()
 		//session.getPersistenceContext().removeDatabaseSnapshot(key);
 		
-		persistenceContext.removeEntity( key );
+		persistenceContext.removeEntityHolder( key );
 		persistenceContext.removeEntry( object );
 
 		Cascade.cascade( CascadingActions.EVICT, CascadePoint.AFTER_EVICT, session, persister, object );

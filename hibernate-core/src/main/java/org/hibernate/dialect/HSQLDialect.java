@@ -12,6 +12,7 @@ import java.sql.Types;
 
 import org.hibernate.boot.model.FunctionContributions;
 import org.hibernate.dialect.function.CommonFunctionFactory;
+import org.hibernate.dialect.function.TrimFunction;
 import org.hibernate.dialect.identity.HSQLIdentityColumnSupport;
 import org.hibernate.dialect.identity.IdentityColumnSupport;
 import org.hibernate.dialect.pagination.LimitHandler;
@@ -27,6 +28,8 @@ import org.hibernate.engine.jdbc.env.spi.IdentifierHelper;
 import org.hibernate.engine.jdbc.env.spi.IdentifierHelperBuilder;
 import org.hibernate.engine.jdbc.env.spi.NameQualifierSupport;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
+import org.hibernate.exception.ConstraintViolationException;
+import org.hibernate.exception.spi.SQLExceptionConversionDelegate;
 import org.hibernate.exception.spi.TemplatedViolatedConstraintNameExtractor;
 import org.hibernate.exception.spi.ViolatedConstraintNameExtractor;
 import org.hibernate.internal.util.JdbcExceptionHelper;
@@ -196,7 +199,7 @@ public class HSQLDialect extends Dialect {
 		functionFactory.arrayPrepend_operator();
 		functionFactory.arrayAppend_operator();
 		functionFactory.arrayContains_hsql();
-		functionFactory.arrayOverlaps_hsql();
+		functionFactory.arrayIntersects_hsql();
 		functionFactory.arrayGet_unnest();
 		functionFactory.arraySet_hsql();
 		functionFactory.arrayRemove_hsql();
@@ -206,6 +209,13 @@ public class HSQLDialect extends Dialect {
 		functionFactory.arrayTrim_trim_array();
 		functionFactory.arrayFill_hsql();
 		functionFactory.arrayToString_hsql();
+
+		//trim() requires parameters to be cast when used as trim character
+		functionContributions.getFunctionRegistry().register( "trim", new TrimFunction(
+				this,
+				functionContributions.getTypeConfiguration(),
+				SqlAstNodeRenderingMode.NO_PLAIN_PARAMETER
+		) );
 	}
 
 	@Override
@@ -290,6 +300,11 @@ public class HSQLDialect extends Dialect {
 			case WEEK:
 				pattern.append("dateadd('day',?2*7,");
 				break;
+			case SECOND:
+				//TODO: if we have an integral number of seconds
+				//      (the common case) this is unnecessary
+				pattern.append("timestampadd(sql_tsi_frac_second, ?2*1e9,");
+				break;
 			default:
 				pattern.append("dateadd('?1',?2,");
 		}
@@ -360,11 +375,6 @@ public class HSQLDialect extends Dialect {
 	}
 
 	@Override
-	public String getForUpdateString() {
-		return " for update";
-	}
-
-	@Override
 	public LimitHandler getLimitHandler() {
 		return OffsetFetchLimitHandler.INSTANCE;
 	}
@@ -422,6 +432,29 @@ public class HSQLDialect extends Dialect {
 				}
 				return null;
 			} );
+
+	@Override
+	public SQLExceptionConversionDelegate buildSQLExceptionConversionDelegate() {
+		return (sqlException, message, sql) -> {
+			final int errorCode = JdbcExceptionHelper.extractErrorCode( sqlException );
+			final String constraintName;
+
+			switch ( errorCode ) {
+				case -104:
+					// Unique constraint violation
+					constraintName = getViolatedConstraintNameExtractor().extractConstraintName(sqlException);
+					return new ConstraintViolationException(
+							message,
+							sqlException,
+							sql,
+							ConstraintViolationException.ConstraintKind.UNIQUE,
+							constraintName
+					);
+			}
+
+			return null;
+		};
+	}
 
 	@Override
 	public String getSelectClauseNullString(int sqlType, TypeConfiguration typeConfiguration) {
@@ -548,6 +581,12 @@ public class HSQLDialect extends Dialect {
 	@Override
 	public String getCurrentTimestampSelectString() {
 		return "values current_timestamp";
+	}
+
+	@Override
+	public boolean doesRoundTemporalOnOverflow() {
+		// HSQLDB does truncation
+		return false;
 	}
 
 	@Override
@@ -682,5 +721,10 @@ public class HSQLDialect extends Dialect {
 	@Override
 	public String quoteCollation(String collation) {
 		return '\"' + collation + '\"';
+	}
+
+	@Override
+	public DmlTargetColumnQualifierSupport getDmlTargetColumnQualifierSupport() {
+		return DmlTargetColumnQualifierSupport.TABLE_ALIAS;
 	}
 }

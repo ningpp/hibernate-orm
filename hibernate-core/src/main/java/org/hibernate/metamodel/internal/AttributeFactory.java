@@ -10,12 +10,15 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
+import java.util.HashMap;
 
 import org.hibernate.AssertionFailure;
 import org.hibernate.PropertyNotFoundException;
 import org.hibernate.boot.model.convert.spi.ConverterDescriptor;
+import org.hibernate.boot.registry.classloading.spi.ClassLoaderService;
 import org.hibernate.internal.EntityManagerMessageLogger;
 import org.hibernate.internal.HEMLogging;
+import org.hibernate.mapping.AggregateColumn;
 import org.hibernate.mapping.Any;
 import org.hibernate.mapping.Collection;
 import org.hibernate.mapping.Component;
@@ -56,8 +59,10 @@ import org.hibernate.persister.entity.EntityPersister;
 import org.hibernate.property.access.internal.PropertyAccessMapImpl;
 import org.hibernate.property.access.spi.Getter;
 import org.hibernate.type.AnyType;
+import org.hibernate.type.BasicPluralType;
 import org.hibernate.type.EntityType;
 import org.hibernate.type.descriptor.java.JavaType;
+import org.hibernate.type.descriptor.java.spi.EmbeddableAggregateJavaType;
 import org.hibernate.type.spi.CompositeTypeImplementor;
 
 import jakarta.persistence.ManyToMany;
@@ -174,7 +179,8 @@ public class AttributeFactory {
 
 		final AttributeMetadata<X, Y> attributeMetadata =
 				determineAttributeMetadata( wrap( ownerType, property ), identifierMemberResolver );
-		final SingularAttributeMetadata<X, Y> singularAttributeMetadata = (SingularAttributeMetadata<X, Y>) attributeMetadata;
+		final SingularAttributeMetadata<X, Y> singularAttributeMetadata =
+				(SingularAttributeMetadata<X, Y>) attributeMetadata;
 		final DomainType<Y> domainType = determineSimpleType( singularAttributeMetadata.getValueContext() );
 		return new SingularAttributeImpl.Identifier<>(
 				ownerType,
@@ -204,7 +210,8 @@ public class AttributeFactory {
 
 		final AttributeMetadata<X, Y> attributeMetadata =
 				determineAttributeMetadata( wrap( ownerType, property ), versionMemberResolver );
-		final SingularAttributeMetadata<X, Y> singularAttributeMetadata = (SingularAttributeMetadata<X, Y>) attributeMetadata;
+		final SingularAttributeMetadata<X, Y> singularAttributeMetadata =
+				(SingularAttributeMetadata<X, Y>) attributeMetadata;
 		final DomainType<Y> domainType = determineSimpleType( singularAttributeMetadata.getValueContext() );
 		return new SingularAttributeImpl.Version<>(
 				ownerType,
@@ -250,19 +257,46 @@ public class AttributeFactory {
 		final Class<Y> embeddableClass = (Class<Y>) component.getComponentClass();
 
 		if ( !component.isGeneric() ) {
-			final EmbeddableDomainType<Y> cached = context.locateEmbeddable( embeddableClass, component);
+			final EmbeddableDomainType<Y> cached = context.locateEmbeddable( embeddableClass, component );
 			if ( cached != null ) {
 				return cached;
 			}
 		}
 
+		final DomainType<?> discriminatorType = component.isPolymorphic() ? component.getDiscriminatorType() : null;
 		final EmbeddableTypeImpl<Y> embeddableType = new EmbeddableTypeImpl<>(
 				context.getJavaTypeRegistry().resolveManagedTypeDescriptor( embeddableClass ),
+				null,
+				discriminatorType,
 				false,
 				context.getJpaMetamodel()
 		);
+		context.registerEmbeddableType( embeddableType, component );
 
-		context.registerEmbeddableType( embeddableType, component);
+		if ( component.isPolymorphic() ) {
+			final java.util.Collection<String> embeddableSubclasses = component.getDiscriminatorValues().values();
+			final java.util.Map<String, EmbeddableTypeImpl<?>> domainTypes = new HashMap<>();
+			domainTypes.put( embeddableType.getTypeName(), embeddableType );
+			final ClassLoaderService cls = context.getJpaMetamodel().getServiceRegistry().requireService(
+					ClassLoaderService.class
+			);
+			for ( final String subclassName : embeddableSubclasses ) {
+				if ( domainTypes.containsKey( subclassName ) ) {
+					assert subclassName.equals( embeddableType.getTypeName() );
+					continue;
+				}
+				final Class<?> subclass = cls.classForName( subclassName );
+				final EmbeddableTypeImpl<?> subType = new EmbeddableTypeImpl<>(
+						context.getJavaTypeRegistry().resolveManagedTypeDescriptor( subclass ),
+						domainTypes.get( component.getSuperclass( subclassName ) ),
+						discriminatorType,
+						false,
+						context.getJpaMetamodel()
+				);
+				domainTypes.put( subclassName, subType );
+				context.registerEmbeddableType( subType, component );
+			}
+		}
 
 		return embeddableType;
 	}
@@ -270,6 +304,8 @@ public class AttributeFactory {
 	private static <Y> EmbeddableTypeImpl<Y> dynamicEmbeddableType(MetadataContext context, Component component) {
 		final EmbeddableTypeImpl<Y> embeddableType = new EmbeddableTypeImpl<>(
 				context.getJavaTypeRegistry().getDescriptor( java.util.Map.class ),
+				null,
+				null,
 				true,
 				context.getJpaMetamodel()
 		);
@@ -298,38 +334,46 @@ public class AttributeFactory {
 				// Due to the use of generics, it can happen that a mapped super class uses a type
 				// for an attribute that is not a managed type. Since this case is not specifically mentioned
 				// in the Jakarta Persistence spec, we handle this by returning a "dummy" entity type
-				final JavaType<Y> domainJavaType = context.getJavaTypeRegistry().resolveDescriptor(
-						typeContext.getJpaBindableType()
-				);
-				return new EntityTypeImpl<>(domainJavaType, context.getJpaMetamodel());
+				final JavaType<Y> domainJavaType =
+						context.getJavaTypeRegistry().resolveDescriptor( typeContext.getJpaBindableType() );
+				return new EntityTypeImpl<>( domainJavaType, context.getJpaMetamodel() );
 			}
-			return domainType;
+			else {
+				return domainType;
+			}
 		}
 
 		assert type instanceof AnyType;
 		final AnyType anyType = (AnyType) type;
-		final JavaType<Y> baseJtd = context.getTypeConfiguration()
-				.getJavaTypeRegistry()
-				.resolveDescriptor( anyType.getReturnedClass() );
 		return new AnyMappingDomainTypeImpl<>(
 				(Any) typeContext.getHibernateValue(),
 				anyType,
-				baseJtd,
+				context.getTypeConfiguration().getJavaTypeRegistry().resolveDescriptor( anyType.getReturnedClass() ),
 				context.getRuntimeModelCreationContext().getSessionFactory().getMappingMetamodel()
 		);
 	}
 
+	@SuppressWarnings( "unchecked" )
 	private static <Y> DomainType<Y> basicDomainType(ValueContext typeContext, MetadataContext context) {
-		if ( typeContext.getJpaBindableType().isPrimitive() ) {
-			// Special BasicDomainType necessary for primitive types in the JPA metamodel
-			@SuppressWarnings("unchecked")
+		final Value hibernateValue = typeContext.getHibernateValue();
+		if ( typeContext.getJpaBindableType().isPrimitive()
+				&& ( (SimpleValue) hibernateValue ).getJpaAttributeConverterDescriptor() == null ) {
+			// Special BasicDomainType necessary for primitive types in the JPA metamodel.
+			// When a converted is applied to the attribute we already resolve to the correct type
 			final Class<Y> type = (Class<Y>) typeContext.getJpaBindableType();
-			return context.resolveBasicType(type);
+			return context.resolveBasicType( type );
 		}
 		else {
-			@SuppressWarnings("unchecked")
-			DomainType<Y> type = (DomainType<Y>) typeContext.getHibernateValue().getType();
-			return type;
+			final org.hibernate.type.Type type = hibernateValue.getType();
+			if ( type instanceof BasicPluralType<?, ?> ) {
+				final JavaType<?> javaTypeDescriptor = ( (BasicPluralType<?, ?>) type ).getElementType()
+						.getJavaTypeDescriptor();
+				if ( javaTypeDescriptor instanceof EmbeddableAggregateJavaType<?> ) {
+					final AggregateColumn aggregateColumn = (AggregateColumn) hibernateValue.getColumns().get( 0 );
+					classEmbeddableType( context, aggregateColumn.getComponent() );
+				}
+			}
+			return (DomainType<Y>) type;
 		}
 	}
 
@@ -363,7 +407,8 @@ public class AttributeFactory {
 			return metadataContext.getMetamodel().getEntityDescriptor( ownerType.getTypeName() );
 		}
 		else if ( persistenceType == Type.PersistenceType.MAPPED_SUPERCLASS ) {
-			PersistentClass persistentClass = metadataContext.getPersistentClassHostingProperties( (MappedSuperclassTypeImpl<?>) ownerType );
+			final PersistentClass persistentClass =
+					metadataContext.getPersistentClassHostingProperties( (MappedSuperclassTypeImpl<?>) ownerType );
 			return metadataContext.getMetamodel().findEntityDescriptor( persistentClass.getClassName() );
 		}
 		else {
@@ -432,69 +477,20 @@ public class AttributeFactory {
 				final org.hibernate.type.Type elementType = elementValue.getType();
 				final boolean isManyToMany = isManyToMany( member );
 
-				// First, determine the type of the elements and use that to help determine the
-				// collection type
-				final AttributeClassification elementClassification;
-				final AttributeClassification attributeClassification;
-				if ( elementType.isAnyType() ) {
-					attributeClassification = AttributeClassification.ELEMENT_COLLECTION;
-					elementClassification = AttributeClassification.ANY;
-				}
-				else if ( elementValue instanceof Component ) {
-					elementClassification = AttributeClassification.EMBEDDED;
-					attributeClassification = AttributeClassification.ELEMENT_COLLECTION;
-				}
-				else if ( elementType.isAssociationType() ) {
-					elementClassification = isManyToMany ?
-							AttributeClassification.MANY_TO_MANY :
-							AttributeClassification.ONE_TO_MANY;
-					attributeClassification = elementClassification;
-				}
-				else {
-					elementClassification = AttributeClassification.BASIC;
-					attributeClassification = AttributeClassification.ELEMENT_COLLECTION;
-				}
-
-				final AttributeClassification indexClassification;
-
-				// Finally, we determine the type of the map key (if needed)
-				if ( value instanceof Map ) {
-					final Value keyValue = ( (Map) value ).getIndex();
-					final org.hibernate.type.Type keyType = keyValue.getType();
-
-					if ( keyType.isAnyType() ) {
-						indexClassification = AttributeClassification.ANY;
-					}
-					else if ( keyValue instanceof Component ) {
-						indexClassification = AttributeClassification.EMBEDDED;
-					}
-					else if ( keyType.isAssociationType() ) {
-						indexClassification = AttributeClassification.MANY_TO_ONE;
-					}
-					else {
-						indexClassification = AttributeClassification.BASIC;
-					}
-				}
-				else if ( value instanceof List ) {
-					indexClassification = AttributeClassification.BASIC;
-				}
-				else {
-					indexClassification = null;
-				}
 				return new PluralAttributeMetadataImpl<>(
 						propertyMapping,
 						attributeContext.getOwnerType(),
 						member,
-						attributeClassification,
-						elementClassification,
-						indexClassification,
+						collectionClassification( elementType, elementValue, isManyToMany ),
+						elementClassification( elementType, elementValue, isManyToMany ),
+						indexClassification( value ),
 						context
 				);
 			}
 			else if ( value instanceof OneToMany ) {
-				// TODO : is this even possible??? Really OneToMany should be describing the
-				// element value within a o.h.mapping.Collection (see logic branch above)
-				throw new IllegalArgumentException( "HUH???" );
+				// TODO : is this even possible? Really OneToMany should be describing the
+				//        element value within a o.h.mapping.Collection (see logic branch above)
+				throw new AssertionFailure( "Unexpected OneToMany" );
 //					final boolean isManyToMany = isManyToMany( member );
 //					//one to many with FK => entity
 //					return new PluralAttributeMetadataImpl(
@@ -534,6 +530,71 @@ public class AttributeFactory {
 		throw new UnsupportedMappingException( "oops, we are missing something: " + propertyMapping );
 	}
 
+	private static AttributeClassification indexClassification(Value value) {
+		if ( value instanceof Map ) {
+			final Value keyValue = ( (Map) value).getIndex();
+			return keyClassification( keyValue.getType(), keyValue );
+		}
+		else if ( value instanceof List ) {
+			return AttributeClassification.BASIC;
+		}
+		else {
+			return null;
+		}
+	}
+
+	private static AttributeClassification elementClassification(
+			org.hibernate.type.Type elementType, Value elementValue, boolean isManyToMany) {
+		final AttributeClassification elementClassification;
+		if ( elementType.isAnyType() ) {
+			return AttributeClassification.ANY;
+		}
+		else if ( elementValue instanceof Component ) {
+			return AttributeClassification.EMBEDDED;
+		}
+		else if ( elementType.isAssociationType() ) {
+			return isManyToMany ?
+					AttributeClassification.MANY_TO_MANY :
+					AttributeClassification.ONE_TO_MANY;
+		}
+		else {
+			return AttributeClassification.BASIC;
+		}
+	}
+
+	private static AttributeClassification collectionClassification(
+			org.hibernate.type.Type elementType, Value elementValue, boolean isManyToMany) {
+		if ( elementType.isAnyType() ) {
+			return AttributeClassification.ELEMENT_COLLECTION;
+		}
+		else if ( elementValue instanceof Component ) {
+			return AttributeClassification.ELEMENT_COLLECTION;
+		}
+		else if ( elementType.isAssociationType() ) {
+			return isManyToMany ?
+					AttributeClassification.MANY_TO_MANY :
+					AttributeClassification.ONE_TO_MANY;
+		}
+		else {
+			return AttributeClassification.ELEMENT_COLLECTION;
+		}
+	}
+
+	private static AttributeClassification keyClassification(org.hibernate.type.Type keyType, Value keyValue) {
+		if ( keyType.isAnyType() ) {
+			return AttributeClassification.ANY;
+		}
+		else if ( keyValue instanceof Component ) {
+			return AttributeClassification.EMBEDDED;
+		}
+		else if ( keyType.isAssociationType() ) {
+			return AttributeClassification.MANY_TO_ONE;
+		}
+		else {
+			return AttributeClassification.BASIC;
+		}
+	}
+
 	public static AttributeClassification determineSingularAssociationClassification(Member member) {
 		if ( member instanceof Field ) {
 			return ( (Field) member ).getAnnotation( OneToOne.class ) != null
@@ -565,7 +626,9 @@ public class AttributeFactory {
 		if ( type instanceof Class ) {
 			return null;
 		}
-		return (ParameterizedType) type;
+		else {
+			return (ParameterizedType) type;
+		}
 	}
 
 	public static boolean isManyToMany(Member member) {
@@ -574,9 +637,10 @@ public class AttributeFactory {
 		}
 		else if ( member instanceof Method ) {
 			return ( (Method) member ).getAnnotation( ManyToMany.class ) != null;
-			}
-
-		return false;
+		}
+		else {
+			return false;
+		}
 	}
 
 	private static final MemberResolver embeddedMemberResolver = (attributeContext, metadataContext) -> {
@@ -586,28 +650,13 @@ public class AttributeFactory {
 
 		final CompositeTypeImplementor ownerComponentType = (CompositeTypeImplementor) ownerBootDescriptor.getType();
 		final EmbeddableValuedModelPart ownerMappingModelDescriptor = ownerComponentType.getMappingModelPart();
-		final EmbeddableRepresentationStrategy ownerRepStrategy;
 
-		if ( ownerMappingModelDescriptor == null ) {
-			// When an entity uses a type variable, bound by a mapped superclass, for an embedded id,
-			// we will not create a model part for the component, but we still need the representation strategy here,
-			// in order to discover the property members to expose on the JPA metamodel
-			ownerRepStrategy = ownerBootDescriptor.getBuildingContext()
-							.getBootstrapContext()
-							.getRepresentationStrategySelector()
-							.resolveStrategy( ownerBootDescriptor, null, metadataContext.getRuntimeModelCreationContext() );
-		}
-		else {
-			ownerRepStrategy = ownerMappingModelDescriptor
-					.getEmbeddableTypeDescriptor()
-					.getRepresentationStrategy();
-		}
+		final EmbeddableRepresentationStrategy ownerRepStrategy =
+				ownerRepresentationStrategy( metadataContext, ownerMappingModelDescriptor, ownerBootDescriptor );
 
 		if ( ownerRepStrategy.getMode() == RepresentationMode.MAP ) {
-			return new MapMember(
-					attributeContext.getPropertyMapping().getName(),
-					attributeContext.getPropertyMapping().getType().getReturnedClass()
-			);
+			final Property propertyMapping = attributeContext.getPropertyMapping();
+			return new MapMember( propertyMapping.getName(), propertyMapping.getType().getReturnedClass() );
 		}
 		else {
 			return ownerRepStrategy
@@ -616,6 +665,25 @@ public class AttributeFactory {
 					.getMember();
 		}
 	};
+
+	private static EmbeddableRepresentationStrategy ownerRepresentationStrategy(
+			MetadataContext metadataContext, EmbeddableValuedModelPart ownerMappingModelDescriptor, Component ownerBootDescriptor) {
+		if ( ownerMappingModelDescriptor == null ) {
+			// When an entity uses a type variable, bound by a mapped superclass, for an embedded id,
+			// we will not create a model part for the component, but we still need the representation strategy here,
+			// in order to discover the property members to expose on the JPA metamodel
+			return ownerBootDescriptor.getBuildingContext()
+							.getBootstrapContext()
+							.getRepresentationStrategySelector()
+							.resolveStrategy(ownerBootDescriptor, null,
+									metadataContext.getRuntimeModelCreationContext() );
+		}
+		else {
+			return ownerMappingModelDescriptor
+					.getEmbeddableTypeDescriptor()
+					.getRepresentationStrategy();
+		}
+	}
 
 
 	private static final MemberResolver virtualIdentifierMemberResolver = (attributeContext, metadataContext) -> {
@@ -666,7 +734,7 @@ public class AttributeFactory {
 				return virtualIdentifierMemberResolver.resolveMember( attributeContext, metadataContext );
 			}
 			else {
-				final Getter getter = declaringEntityPersister.getRepresentationStrategy().resolvePropertyAccess( property ).getGetter();
+				final Getter getter = getter( declaringEntityPersister, property );
 				return getter instanceof PropertyAccessMapImpl.GetterImpl
 						? new MapMember( propertyName, property.getType().getReturnedClass() )
 						: getter.getMember();
@@ -678,16 +746,17 @@ public class AttributeFactory {
 	};
 
 	private final MemberResolver identifierMemberResolver = (attributeContext, metadataContext) -> {
-		final AbstractIdentifiableType<?> identifiableType = (AbstractIdentifiableType<?>) attributeContext.getOwnerType();
+		final AbstractIdentifiableType<?> identifiableType =
+				(AbstractIdentifiableType<?>) attributeContext.getOwnerType();
 		final EntityPersister declaringEntityMapping = getDeclaringEntity( identifiableType, metadataContext );
 		final EntityIdentifierMapping identifierMapping = declaringEntityMapping.getIdentifierMapping();
-		final String attributeName = attributeContext.getPropertyMapping().getName();
-		if ( !attributeName.equals( identifierMapping.getAttributeName() ) ) {
+		final Property propertyMapping = attributeContext.getPropertyMapping();
+		if ( !propertyMapping.getName().equals( identifierMapping.getAttributeName() ) ) {
 			// this *should* indicate processing part of an IdClass...
 			return virtualIdentifierMemberResolver.resolveMember( attributeContext, metadataContext );
 		}
 
-		final Getter getter = declaringEntityMapping.getRepresentationStrategy().resolvePropertyAccess( attributeContext.getPropertyMapping() ).getGetter();
+		final Getter getter = getter( declaringEntityMapping, propertyMapping );
 		if ( getter instanceof PropertyAccessMapImpl.GetterImpl ) {
 			return new MapMember( identifierMapping.getAttributeName(), identifierMapping.getJavaType().getJavaTypeClass() );
 		}
@@ -697,7 +766,8 @@ public class AttributeFactory {
 	};
 
 	private final MemberResolver versionMemberResolver = (attributeContext, metadataContext) -> {
-		final AbstractIdentifiableType<?> identifiableType = (AbstractIdentifiableType<?>) attributeContext.getOwnerType();
+		final AbstractIdentifiableType<?> identifiableType =
+				(AbstractIdentifiableType<?>) attributeContext.getOwnerType();
 		final EntityPersister entityPersister = getDeclaringEntity( identifiableType, metadataContext );
 		final EntityVersionMapping versionMapping = entityPersister.getVersionMapping();
 		assert entityPersister.isVersioned();
@@ -709,7 +779,7 @@ public class AttributeFactory {
 			throw new IllegalArgumentException( "Given property did not match declared version property" );
 		}
 
-		final Getter getter = entityPersister.getRepresentationStrategy().resolvePropertyAccess( attributeContext.getPropertyMapping() ).getGetter();
+		final Getter getter = getter( entityPersister, attributeContext.getPropertyMapping() );
 		if ( getter instanceof PropertyAccessMapImpl.GetterImpl ) {
 			return new MapMember( versionPropertyName, versionMapping.getJavaType().getJavaTypeClass() );
 		}
@@ -717,4 +787,11 @@ public class AttributeFactory {
 			return getter.getMember();
 		}
 	};
+
+	private static Getter getter(EntityPersister declaringEntityMapping, Property propertyMapping) {
+		return declaringEntityMapping.getRepresentationStrategy()
+				.resolvePropertyAccess( propertyMapping )
+				.getGetter();
+	}
+
 }

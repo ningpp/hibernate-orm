@@ -283,4 +283,18 @@ public interface DeprecationLogger extends BasicLogger {
 	)
 	void deprecatedSettingNoReplacement(String settingName);
 
+	@LogMessage(level = WARN)
+	@Message(
+			id = 90000031,
+			value = "The native query colon escaping used for the [%s] operator is deprecated and will be removed. Use [%s] instead."
+	)
+	void deprecatedNativeQueryColonEscaping(String oldOperator, String newOperator);
+
+	@LogMessage(level = WARN)
+	@Message(
+			id = 90000032,
+			value = "The support for passing arrays to array_contains() is deprecated and will be removed. Use array_includes() instead."
+	)
+	void deprecatedArrayContainsWithArray();
+
 }

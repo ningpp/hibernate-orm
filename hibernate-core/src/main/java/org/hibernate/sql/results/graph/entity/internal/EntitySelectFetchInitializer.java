@@ -6,8 +6,9 @@
  */
 package org.hibernate.sql.results.graph.entity.internal;
 
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
+import org.hibernate.EntityFilterException;
 import org.hibernate.FetchNotFoundException;
 import org.hibernate.Hibernate;
 import org.hibernate.annotations.NotFoundAction;
@@ -16,63 +17,93 @@ import org.hibernate.engine.spi.EntityKey;
 import org.hibernate.engine.spi.PersistenceContext;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.log.LoggingHelper;
-import org.hibernate.internal.util.StringHelper;
-import org.hibernate.metamodel.mapping.ForeignKeyDescriptor;
+import org.hibernate.metamodel.mapping.AttributeMapping;
 import org.hibernate.metamodel.mapping.ModelPart;
 import org.hibernate.metamodel.mapping.internal.ToOneAttributeMapping;
 import org.hibernate.persister.entity.EntityPersister;
 import org.hibernate.proxy.HibernateProxy;
 import org.hibernate.proxy.LazyInitializer;
 import org.hibernate.spi.NavigablePath;
-import org.hibernate.spi.EntityIdentifierNavigablePath;
-import org.hibernate.sql.results.graph.AbstractFetchParentAccess;
+import org.hibernate.sql.results.graph.AssemblerCreationState;
+import org.hibernate.sql.results.graph.DomainResult;
 import org.hibernate.sql.results.graph.DomainResultAssembler;
-import org.hibernate.sql.results.graph.FetchParentAccess;
+import org.hibernate.sql.results.graph.Initializer;
+import org.hibernate.sql.results.graph.InitializerData;
+import org.hibernate.sql.results.graph.InitializerParent;
 import org.hibernate.sql.results.graph.entity.EntityInitializer;
-import org.hibernate.sql.results.graph.entity.EntityLoadingLogging;
+import org.hibernate.sql.results.graph.internal.AbstractInitializer;
 import org.hibernate.sql.results.jdbc.spi.RowProcessingState;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
+
 import static org.hibernate.internal.log.LoggingHelper.toLoggableString;
+import static org.hibernate.proxy.HibernateProxy.extractLazyInitializer;
 
 /**
  * @author Andrea Boriero
  */
-public class EntitySelectFetchInitializer extends AbstractFetchParentAccess implements EntityInitializer {
+public class EntitySelectFetchInitializer<Data extends EntitySelectFetchInitializer.EntitySelectFetchInitializerData>
+		extends AbstractInitializer<Data> implements EntityInitializer<Data> {
 	private static final String CONCRETE_NAME = EntitySelectFetchInitializer.class.getSimpleName();
 
-	protected final FetchParentAccess parentAccess;
+	protected final InitializerParent<?> parent;
 	private final NavigablePath navigablePath;
+	private final boolean isPartOfKey;
 	private final boolean isEnhancedForLazyLoading;
 
 	protected final EntityPersister concreteDescriptor;
 	protected final DomainResultAssembler<?> keyAssembler;
-	private final ToOneAttributeMapping toOneMapping;
+	protected final ToOneAttributeMapping toOneMapping;
+	protected final boolean affectedByFilter;
 
-	protected boolean isInitialized;
+	public static class EntitySelectFetchInitializerData extends InitializerData {
+		// per-row state
+		protected @Nullable Object entityIdentifier;
 
-	@Override
-	public FetchParentAccess getFetchParentAccess() {
-		return parentAccess;
+		public EntitySelectFetchInitializerData(RowProcessingState rowProcessingState) {
+			super( rowProcessingState );
+		}
+
+		/*
+		 * Used by Hibernate Reactive
+		 */
+		public EntitySelectFetchInitializerData(EntitySelectFetchInitializerData original) {
+			super( original );
+			this.entityIdentifier = original.entityIdentifier;
+		}
 	}
 
-	protected Object entityInstance;
-
 	public EntitySelectFetchInitializer(
-			FetchParentAccess parentAccess,
+			InitializerParent<?> parent,
 			ToOneAttributeMapping toOneMapping,
 			NavigablePath fetchedNavigable,
 			EntityPersister concreteDescriptor,
-			DomainResultAssembler<?> keyAssembler) {
-		this.parentAccess = parentAccess;
+			DomainResult<?> keyResult,
+			boolean affectedByFilter,
+			AssemblerCreationState creationState) {
+		super( creationState );
+		this.parent = parent;
 		this.toOneMapping = toOneMapping;
 		this.navigablePath = fetchedNavigable;
+		this.isPartOfKey = Initializer.isPartOfKey( fetchedNavigable, parent );
 		this.concreteDescriptor = concreteDescriptor;
-		this.keyAssembler = keyAssembler;
+		this.keyAssembler = keyResult.createResultAssembler( this, creationState );
 		this.isEnhancedForLazyLoading = concreteDescriptor.getBytecodeEnhancementMetadata().isEnhancedForLazyLoading();
+		this.affectedByFilter = affectedByFilter;
+	}
+
+	@Override
+	protected InitializerData createInitializerData(RowProcessingState rowProcessingState) {
+		return new EntitySelectFetchInitializerData( rowProcessingState );
 	}
 
 	public ModelPart getInitializedPart(){
 		return toOneMapping;
+	}
+
+	@Override
+	public @Nullable InitializerParent<?> getParent() {
+		return parent;
 	}
 
 	@Override
@@ -81,156 +112,176 @@ public class EntitySelectFetchInitializer extends AbstractFetchParentAccess impl
 	}
 
 	@Override
-	public void resolveKey(RowProcessingState rowProcessingState) {
-		// nothing to do
-	}
-
-	@Override
-	public void resolveInstance(RowProcessingState rowProcessingState) {
-		// Defer the select by default to the initialize phase
-		// We only need to select in this phase if this is part of an identifier or foreign key
-		NavigablePath np = navigablePath.getParent();
-		while ( np != null ) {
-			if ( np instanceof EntityIdentifierNavigablePath
-					|| ForeignKeyDescriptor.PART_NAME.equals( np.getLocalName() )
-					|| ForeignKeyDescriptor.TARGET_PART_NAME.equals( np.getLocalName() )) {
-
-				initializeInstance( rowProcessingState );
-				return;
+	public void resolveFromPreviousRow(Data data) {
+		if ( data.getState() == State.UNINITIALIZED ) {
+			if ( data.entityIdentifier == null ) {
+				data.setState( State.MISSING );
+				data.setInstance( null );
 			}
-			np = np.getParent();
+			else {
+				final Initializer<?> initializer = keyAssembler.getInitializer();
+				if ( initializer != null ) {
+					initializer.resolveFromPreviousRow( data.getRowProcessingState() );
+				}
+				data.setState( State.INITIALIZED );
+			}
 		}
 	}
 
 	@Override
-	public void initializeInstance(RowProcessingState rowProcessingState) {
-		if ( entityInstance != null || isInitialized ) {
+	public void resolveInstance(Data data) {
+		if ( data.getState() != State.KEY_RESOLVED ) {
 			return;
 		}
 
-		final EntityInitializer parentEntityInitializer = parentAccess.findFirstEntityInitializer();
-		if ( parentEntityInitializer != null && parentEntityInitializer.isEntityInitialized() ) {
-			isInitialized = true;
+		final RowProcessingState rowProcessingState = data.getRowProcessingState();
+		data.entityIdentifier = keyAssembler.assemble( rowProcessingState );
+
+		if ( data.entityIdentifier == null ) {
+			data.setState( State.MISSING );
+			data.setInstance( null );
 			return;
 		}
+		data.setState( State.INITIALIZED );
+		initialize( data );
+	}
 
-		if ( !isAttributeAssignableToConcreteDescriptor() ) {
+	@Override
+	public void resolveInstance(Object instance, Data data) {
+		if ( instance == null ) {
+			data.setState(  State.MISSING );
+			data.entityIdentifier = null;
+			data.setInstance( null );
+		}
+		else {
+			final RowProcessingState rowProcessingState = data.getRowProcessingState();
+			final SharedSessionContractImplementor session = rowProcessingState.getSession();
+			final LazyInitializer lazyInitializer = extractLazyInitializer( data.getInstance() );
+			if ( lazyInitializer == null ) {
+				data.setState( State.INITIALIZED );
+				data.entityIdentifier = concreteDescriptor.getIdentifier( instance, session );
+			}
+			else if ( lazyInitializer.isUninitialized() ) {
+				data.setState( State.RESOLVED );
+				data.entityIdentifier = lazyInitializer.getIdentifier();
+			}
+			else {
+				data.setState( State.INITIALIZED );
+				data.entityIdentifier = lazyInitializer.getIdentifier();
+			}
+			data.setInstance( instance );
+			final Initializer<?> initializer = keyAssembler.getInitializer();
+			if ( initializer != null ) {
+				initializer.resolveInstance( data.entityIdentifier, rowProcessingState );
+			}
+			else if ( rowProcessingState.needsResolveState() ) {
+				// Resolve the state of the identifier if result caching is enabled and this is not a query cache hit
+				keyAssembler.resolveState( rowProcessingState );
+			}
+		}
+	}
+
+	@Override
+	public void initializeInstance(Data data) {
+		if ( data.getState() != State.RESOLVED ) {
 			return;
 		}
+		data.setState( State.INITIALIZED );
+		Hibernate.initialize( data.getInstance() );
+	}
 
-		final Object entityIdentifier = keyAssembler.assemble( rowProcessingState );
-
-		if ( entityIdentifier == null ) {
-			isInitialized = true;
-			return;
-		}
-
-		if ( EntityLoadingLogging.ENTITY_LOADING_LOGGER.isTraceEnabled() ) {
-			EntityLoadingLogging.ENTITY_LOADING_LOGGER.tracef(
-					"(%s) Beginning Initializer#resolveInstance process for entity (%s) : %s",
-					StringHelper.collapse( this.getClass().getName() ),
-					getNavigablePath(),
-					entityIdentifier
-			);
-		}
+	protected void initialize(EntitySelectFetchInitializerData data) {
+		final RowProcessingState rowProcessingState = data.getRowProcessingState();
 		final SharedSessionContractImplementor session = rowProcessingState.getSession();
-		final String entityName = concreteDescriptor.getEntityName();
-
-		final EntityKey entityKey = new EntityKey( entityIdentifier, concreteDescriptor );
+		final EntityKey entityKey = new EntityKey( data.entityIdentifier, concreteDescriptor );
 
 		final PersistenceContext persistenceContext = session.getPersistenceContextInternal();
 		final EntityHolder holder = persistenceContext.getEntityHolder( entityKey );
 		if ( holder != null ) {
-			if ( EntityLoadingLogging.ENTITY_LOADING_LOGGER.isDebugEnabled() ) {
-				EntityLoadingLogging.ENTITY_LOADING_LOGGER.debugf(
-						"(%s) Found existing loading entry [%s] - using loading instance",
-						CONCRETE_NAME,
-						toLoggableString(
-								getNavigablePath(),
-								entityIdentifier
-						)
-				);
-			}
-			entityInstance = holder.getEntity();
+			data.setInstance( persistenceContext.proxyFor( holder, concreteDescriptor ) );
 			if ( holder.getEntityInitializer() == null ) {
-				if ( entityInstance != null && Hibernate.isInitialized( entityInstance ) ) {
-					isInitialized = true;
+				if ( data.getInstance() != null && Hibernate.isInitialized( data.getInstance() ) ) {
+					data.setState( State.INITIALIZED );
 					return;
 				}
 			}
 			else if ( holder.getEntityInitializer() != this ) {
 				// the entity is already being loaded elsewhere
-				if ( EntityLoadingLogging.ENTITY_LOADING_LOGGER.isDebugEnabled() ) {
-					EntityLoadingLogging.ENTITY_LOADING_LOGGER.debugf(
-							"(%s) Entity [%s] being loaded by another initializer [%s] - skipping processing",
-							CONCRETE_NAME,
-							toLoggableString( getNavigablePath(), entityIdentifier ),
-							holder.getEntityInitializer()
-					);
-				}
-				isInitialized = true;
+				data.setState( State.INITIALIZED );
 				return;
 			}
-			else if ( entityInstance == null ) {
-				isInitialized = true;
+			else if ( data.getInstance() == null ) {
+				// todo: maybe mark this as resolved instead?
+				assert holder.getProxy() == null : "How to handle this case?";
+				data.setState( State.INITIALIZED );
 				return;
 			}
 		}
+		data.setState( State.INITIALIZED );
+		final String entityName = concreteDescriptor.getEntityName();
 
-		if ( EntityLoadingLogging.ENTITY_LOADING_LOGGER.isDebugEnabled() ) {
-			EntityLoadingLogging.ENTITY_LOADING_LOGGER.debugf(
-					"(%s) Invoking session#internalLoad for entity (%s) : %s",
-					CONCRETE_NAME,
-					toLoggableString( getNavigablePath(), entityIdentifier ),
-					entityIdentifier
-			);
-		}
-		entityInstance = session.internalLoad(
+		final Object instance = session.internalLoad(
 				entityName,
-				entityIdentifier,
+				data.entityIdentifier,
 				true,
 				toOneMapping.isInternalLoadNullable()
 		);
+		data.setInstance( instance );
 
-		if ( entityInstance == null ) {
-			if ( toOneMapping.getNotFoundAction() == NotFoundAction.EXCEPTION ) {
-				throw new FetchNotFoundException( entityName, entityIdentifier );
+		if ( instance == null ) {
+			if ( toOneMapping.getNotFoundAction() != NotFoundAction.IGNORE ) {
+				if ( affectedByFilter ) {
+					throw new EntityFilterException(
+							entityName,
+							data.entityIdentifier,
+							toOneMapping.getNavigableRole().getFullPath()
+					);
+				}
+				if ( toOneMapping.getNotFoundAction() == NotFoundAction.EXCEPTION ) {
+					throw new FetchNotFoundException( entityName, data.entityIdentifier );
+				}
 			}
 			rowProcessingState.getSession().getPersistenceContextInternal().claimEntityHolderIfPossible(
-					entityKey,
-					entityInstance,
+					new EntityKey( data.entityIdentifier, concreteDescriptor ),
+					instance,
 					rowProcessingState.getJdbcValuesSourceProcessingState(),
 					this
 			);
 		}
 
-		if ( EntityLoadingLogging.ENTITY_LOADING_LOGGER.isDebugEnabled() ) {
-			EntityLoadingLogging.ENTITY_LOADING_LOGGER.debugf(
-					"(%s) Entity [%s] : %s has being loaded by session.internalLoad.",
-					CONCRETE_NAME,
-					toLoggableString( getNavigablePath(), entityIdentifier ),
-					entityIdentifier
-			);
-		}
-
 		final boolean unwrapProxy = toOneMapping.isUnwrapProxy() && isEnhancedForLazyLoading;
-		final LazyInitializer lazyInitializer = HibernateProxy.extractLazyInitializer( entityInstance );
+		final LazyInitializer lazyInitializer = HibernateProxy.extractLazyInitializer( data.getInstance() );
 		if ( lazyInitializer != null ) {
 			lazyInitializer.setUnwrap( unwrapProxy );
 		}
-
-		isInitialized = true;
-	}
-
-	protected boolean isAttributeAssignableToConcreteDescriptor() {
-		return isAttributeAssignableToConcreteDescriptor( parentAccess, toOneMapping );
 	}
 
 	@Override
-	public void finishUpRow(RowProcessingState rowProcessingState) {
-		entityInstance = null;
-		isInitialized = false;
-		clearResolutionListeners();
+	public void initializeInstanceFromParent(Object parentInstance, Data data) {
+		final AttributeMapping attributeMapping = getInitializedPart().asAttributeMapping();
+		final Object instance = attributeMapping != null
+				? attributeMapping.getValue( parentInstance )
+				: parentInstance;
+		if ( instance == null ) {
+			data.setState( State.MISSING );
+			data.entityIdentifier = null;
+			data.setInstance( null );
+		}
+		else {
+			data.setState( State.INITIALIZED );
+			// No need to initialize this
+			data.entityIdentifier = null;
+			data.setInstance( instance );
+			Hibernate.initialize( instance );
+		}
+	}
+
+	@Override
+	protected void forEachSubInitializer(BiConsumer<Initializer<?>, RowProcessingState> consumer, InitializerData data) {
+		final Initializer<?> initializer = keyAssembler.getInitializer();
+		if ( initializer != null ) {
+			consumer.accept( initializer, data.getRowProcessingState() );
+		}
 	}
 
 	@Override
@@ -239,42 +290,36 @@ public class EntitySelectFetchInitializer extends AbstractFetchParentAccess impl
 	}
 
 	@Override
-	public Object getEntityInstance() {
-		return entityInstance;
+	public Object getEntityInstance(Data data) {
+		return data.getInstance();
 	}
 
 	@Override
-	public EntityKey getEntityKey() {
-		throw new UnsupportedOperationException();
-	}
-
-	@Override
-	public boolean isEntityInitialized() {
-		return isInitialized;
-	}
-
-	@Override
-	public Object getParentKey() {
-		return parentAccess.getParentKey();
-	}
-
-	@Override
-	public void registerResolutionListener(Consumer<Object> listener) {
-		if ( entityInstance != null ) {
-			listener.accept( entityInstance );
-		}
-		else {
-			super.registerResolutionListener( listener );
-		}
-	}
-
-	@Override
-	public EntityPersister getConcreteDescriptor() {
+	public EntityPersister getConcreteDescriptor(Data data) {
 		return concreteDescriptor;
+	}
+
+	@Override
+	public @Nullable Object getEntityIdentifier(Data data) {
+		return data.entityIdentifier;
+	}
+
+	@Override
+	public boolean isPartOfKey() {
+		return isPartOfKey;
+	}
+
+	@Override
+	public boolean isResultInitializer() {
+		return false;
 	}
 
 	@Override
 	public String toString() {
 		return "EntitySelectFetchInitializer(" + LoggingHelper.toLoggableString( getNavigablePath() ) + ")";
+	}
+
+	public DomainResultAssembler<?> getKeyAssembler() {
+		return keyAssembler;
 	}
 }

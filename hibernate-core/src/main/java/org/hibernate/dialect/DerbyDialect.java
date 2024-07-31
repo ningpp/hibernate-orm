@@ -9,6 +9,7 @@ package org.hibernate.dialect;
 import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.Locale;
 
 import org.hibernate.boot.model.FunctionContributions;
 import org.hibernate.boot.model.TypeContributions;
@@ -35,8 +36,11 @@ import org.hibernate.engine.jdbc.dialect.spi.DialectResolutionInfo;
 import org.hibernate.engine.jdbc.env.spi.IdentifierHelper;
 import org.hibernate.engine.jdbc.env.spi.IdentifierHelperBuilder;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
+import org.hibernate.exception.ConstraintViolationException;
 import org.hibernate.exception.LockTimeoutException;
 import org.hibernate.exception.spi.SQLExceptionConversionDelegate;
+import org.hibernate.exception.spi.TemplatedViolatedConstraintNameExtractor;
+import org.hibernate.exception.spi.ViolatedConstraintNameExtractor;
 import org.hibernate.internal.util.JdbcExceptionHelper;
 import org.hibernate.metamodel.mapping.EntityMappingType;
 import org.hibernate.metamodel.spi.RuntimeModelCreationContext;
@@ -74,6 +78,8 @@ import org.hibernate.type.spi.TypeConfiguration;
 
 import jakarta.persistence.TemporalType;
 
+import static org.hibernate.query.sqm.produce.function.FunctionParameterType.INTEGER;
+import static org.hibernate.query.sqm.produce.function.FunctionParameterType.STRING;
 import static org.hibernate.type.SqlTypes.BINARY;
 import static org.hibernate.type.SqlTypes.BLOB;
 import static org.hibernate.type.SqlTypes.CHAR;
@@ -305,6 +311,11 @@ public class DerbyDialect extends Dialect {
 	}
 
 	@Override
+	public int getDefaultTimestampPrecision() {
+		return 9;
+	}
+
+	@Override
 	public void initializeFunctionRegistry(FunctionContributions functionContributions) {
 		super.initializeFunctionRegistry(functionContributions);
 
@@ -361,8 +372,8 @@ public class DerbyDialect extends Dialect {
 		functionFactory.power_expLn();
 		functionFactory.round_floor();
 		functionFactory.trunc_floor();
-		functionFactory.octetLength_pattern( "length(?1)" );
-		functionFactory.bitLength_pattern( "length(?1)*8" );
+		functionFactory.octetLength_pattern( "length(?1)", SqlAstNodeRenderingMode.NO_PLAIN_PARAMETER );
+		functionFactory.bitLength_pattern( "length(?1)*8", SqlAstNodeRenderingMode.NO_PLAIN_PARAMETER );
 
 		functionContributions.getFunctionRegistry().register(
 				"concat",
@@ -399,7 +410,7 @@ public class DerbyDialect extends Dialect {
 	 * no functions at all for calendaring, but we can
 	 * emulate the most basic functionality of extract()
 	 * using the functions it does have.
-	 *
+	 * <p>
 	 * The only supported {@link TemporalUnit}s are:
 	 * {@link TemporalUnit#YEAR},
 	 * {@link TemporalUnit#MONTH}
@@ -500,7 +511,11 @@ public class DerbyDialect extends Dialect {
 			case NATIVE:
 				return "{fn timestampadd(sql_tsi_frac_second,mod(bigint(?2),1000000000),{fn timestampadd(sql_tsi_second,bigint((?2)/1000000000),?3)})}";
 			default:
-				return "{fn timestampadd(sql_tsi_?1,bigint(?2),?3)}";
+				final String addExpression = "{fn timestampadd(sql_tsi_?1,bigint(?2),?3)}";
+				// Since timestampadd will always produce a TIMESTAMP, we have to cast back to the intended type
+				return temporalType == TemporalType.TIMESTAMP
+						? addExpression
+						: "cast(" + addExpression + " as " + temporalType.name().toLowerCase( Locale.ROOT ) + ")" ;
 		}
 	}
 
@@ -549,11 +564,6 @@ public class DerbyDialect extends Dialect {
 	public boolean supportsCommentOn() {
 		//HHH-4531
 		return false;
-	}
-
-	@Override
-	public RowLockStrategy getWriteRowLockStrategy() {
-		return RowLockStrategy.NONE;
 	}
 
 	@Override
@@ -691,16 +701,44 @@ public class DerbyDialect extends Dialect {
 	}
 
 	@Override
+	public ViolatedConstraintNameExtractor getViolatedConstraintNameExtractor() {
+		return new TemplatedViolatedConstraintNameExtractor( sqle -> {
+			final String sqlState = JdbcExceptionHelper.extractSqlState( sqle );
+			if ( sqlState != null ) {
+				switch ( sqlState ) {
+					case "23505":
+						return TemplatedViolatedConstraintNameExtractor.extractUsingTemplate(
+								"'", "'",
+								sqle.getMessage()
+						);
+				}
+			}
+			return null;
+		} );
+	}
+
+	@Override
 	public SQLExceptionConversionDelegate buildSQLExceptionConversionDelegate() {
 		return (sqlException, message, sql) -> {
 			final String sqlState = JdbcExceptionHelper.extractSqlState( sqlException );
 //				final int errorCode = JdbcExceptionHelper.extractErrorCode( sqlException );
+			final String constraintName;
 
 			if ( sqlState != null ) {
 				switch ( sqlState ) {
+					case "23505":
+						// Unique constraint violation
+						constraintName = getViolatedConstraintNameExtractor().extractConstraintName(sqlException);
+						return new ConstraintViolationException(
+								message,
+								sqlException,
+								sql,
+								ConstraintViolationException.ConstraintKind.UNIQUE,
+								constraintName
+						);
 					case "40XL1":
 					case "40XL2":
-						throw new LockTimeoutException( message, sqlException, sql );
+						return new LockTimeoutException( message, sqlException, sql );
 				}
 			}
 			return null;
@@ -1013,4 +1051,10 @@ public class DerbyDialect extends Dialect {
 	public UniqueDelegate getUniqueDelegate() {
 		return uniqueDelegate;
 	}
+
+	@Override
+	public DmlTargetColumnQualifierSupport getDmlTargetColumnQualifierSupport() {
+		return DmlTargetColumnQualifierSupport.TABLE_ALIAS;
+	}
+
 }

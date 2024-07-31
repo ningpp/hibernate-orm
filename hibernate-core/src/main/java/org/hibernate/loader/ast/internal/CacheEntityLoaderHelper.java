@@ -169,8 +169,7 @@ public class CacheEntityLoaderHelper {
 				}
 			}
 			if ( options.isAllowNulls() ) {
-				final EntityPersister persister = event.getSession()
-						.getFactory()
+				final EntityPersister persister = event.getFactory()
 						.getRuntimeMetamodels()
 						.getMappingMetamodel()
 						.getEntityDescriptor( keyToLoad.getEntityName() );
@@ -215,7 +214,7 @@ public class CacheEntityLoaderHelper {
 					.setId( event.getEntityId() )
 					.setPersister( persister );
 
-			event.getSession().getSessionFactory()
+			event.getFactory()
 					.getFastSessionServices()
 					.firePostLoadEvent( postLoadEvent );
 		}
@@ -357,10 +356,15 @@ public class CacheEntityLoaderHelper {
 		final StatefulPersistenceContext statefulPersistenceContext = (StatefulPersistenceContext) session.getPersistenceContext();
 
 		if ( ( isManagedEntity( entity ) ) ) {
-			statefulPersistenceContext.addReferenceEntry(
+			final EntityHolder entityHolder = statefulPersistenceContext.addEntityHolder(
+					entityKey,
+					entity
+			);
+			final EntityEntry entityEntry = statefulPersistenceContext.addReferenceEntry(
 					entity,
 					Status.READ_ONLY
 			);
+			entityHolder.setEntityEntry( entityEntry );
 		}
 		else {
 			TwoPhaseLoad.addUninitializedCachedEntity(
@@ -471,7 +475,7 @@ public class CacheEntityLoaderHelper {
 			isReadOnly = source.isDefaultReadOnly();
 		}
 
-		persistenceContext.addEntry(
+		EntityEntry entityEntry = persistenceContext.addEntry(
 				entity,
 				( isReadOnly ? Status.READ_ONLY : Status.MANAGED ),
 				values,
@@ -483,6 +487,7 @@ public class CacheEntityLoaderHelper {
 				subclassPersister,
 				false
 		);
+		persistenceContext.getEntityHolder( entityKey ).setEntityEntry( entityEntry );
 		subclassPersister.afterInitialize( entity, source );
 		persistenceContext.initializeNonLazyCollections();
 

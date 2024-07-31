@@ -6,6 +6,8 @@
  */
 package org.hibernate.cfg;
 
+import org.hibernate.Incubating;
+import org.hibernate.annotations.CacheLayout;
 import org.hibernate.cache.internal.NoCachingRegionFactory;
 import org.hibernate.cache.spi.RegionFactory;
 import org.hibernate.cache.spi.TimestampsCacheFactory;
@@ -79,11 +81,21 @@ public interface CacheSettings {
 	String USE_QUERY_CACHE = "hibernate.cache.use_query_cache";
 
 	/**
+	 * Specifies the default {@link org.hibernate.annotations.CacheLayout} to use for the query cache.
+	 *
+	 * @see org.hibernate.boot.SessionFactoryBuilder#applyQueryCacheLayout(CacheLayout)
+	 * @see org.hibernate.annotations.QueryCacheLayout
+	 * @since 6.5
+	 */
+	@Incubating
+	String QUERY_CACHE_LAYOUT = "hibernate.cache.query_cache_layout";
+
+	/**
 	 * The {@link RegionFactory} implementation, either:
 	 * <ul>
 	 *     <li>an instance of {@link RegionFactory},
 	 *     <li>a {@link Class} implementing {@link RegionFactory}, or
-	 *     <li>he name of a class implementing {@link RegionFactory}.
+	 *     <li>the name of a class implementing {@link RegionFactory}.
 	 * </ul>
 	 * <p>
 	 * Defaults to {@link NoCachingRegionFactory}, so that caching is disabled.

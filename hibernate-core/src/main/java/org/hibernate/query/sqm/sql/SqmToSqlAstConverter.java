@@ -7,6 +7,7 @@
 package org.hibernate.query.sqm.sql;
 
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.hibernate.internal.util.collections.Stack;
@@ -23,6 +24,8 @@ import org.hibernate.sql.ast.tree.expression.Expression;
 import org.hibernate.sql.ast.tree.expression.QueryTransformer;
 import org.hibernate.sql.ast.tree.predicate.Predicate;
 
+import jakarta.annotation.Nullable;
+
 /**
  * Specialized SemanticQueryWalker (SQM visitor) for producing SQL AST.
  *
@@ -34,6 +37,12 @@ public interface SqmToSqlAstConverter extends SemanticQueryWalker<Object>, SqlAs
 	SqmQueryPart<?> getCurrentSqmQueryPart();
 
 	void registerQueryTransformer(QueryTransformer transformer);
+
+	/**
+	 * Returns whether the state of the translation is currently in type inference mode.
+	 * This is useful to avoid type inference based on other incomplete inference information.
+	 */
+	boolean isInTypeInference();
 
 	/**
 	 * Returns the function return type implied from the context within which it is used.
@@ -52,4 +61,10 @@ public interface SqmToSqlAstConverter extends SemanticQueryWalker<Object>, SqlAs
 
 	Predicate visitNestedTopLevelPredicate(SqmPredicate predicate);
 
+	/**
+	 * Resolve a generic metadata object from the provided source, using the specified producer.
+	 */
+	default <S, M> M resolveMetadata(S source, Function<S, M> producer) {
+		return producer.apply( source );
+	}
 }

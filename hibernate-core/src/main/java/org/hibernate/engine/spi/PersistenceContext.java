@@ -348,10 +348,20 @@ public interface PersistenceContext {
 	Object proxyFor(Object impl);
 
 	/**
-	 * Return the existing proxy associated with the given {@code EntityKey}, or the
-	 * argument (the entity associated with the key) if no proxy exists.
-	 * (slower than the form above)
+	 * Return the existing {@linkplain EntityHolder#getProxy() proxy} associated with
+	 * the given {@link EntityHolder}, or the {@linkplain EntityHolder#getEntity() entity}
+	 * if no proxy exists.
 	 */
+	Object proxyFor(EntityHolder holder, EntityPersister persister);
+
+	/**
+	 * Return the existing {@linkplain EntityHolder#getProxy() proxy} associated with
+	 * the given {@link EntityHolder}, or the {@linkplain EntityHolder#getEntity() entity}
+	 * if it contains no proxy.
+	 *
+	 * @deprecated Use {@link #proxyFor(EntityHolder, EntityPersister)} instead.
+	 */
+	@Deprecated( forRemoval = true )
 	Object proxyFor(EntityHolder holder);
 
 	/**
@@ -509,13 +519,16 @@ public interface PersistenceContext {
 			EntityKey key,
 			@Nullable Object entity,
 			JdbcValuesSourceProcessingState processingState,
-			EntityInitializer initializer);
+			EntityInitializer<?> initializer);
 
-	EntityHolder getEntityHolder(EntityKey key);
+	@Incubating
+	EntityHolder addEntityHolder(EntityKey key, Object entity);
+
+	@Nullable EntityHolder getEntityHolder(EntityKey key);
 
 	boolean containsEntityHolder(EntityKey key);
 
-	EntityHolder removeEntityHolder(EntityKey key);
+	@Nullable EntityHolder removeEntityHolder(EntityKey key);
 
 	@Incubating
 	void postLoad(JdbcValuesSourceProcessingState processingState, Consumer<EntityHolder> loadedConsumer);
@@ -554,7 +567,7 @@ public interface PersistenceContext {
 	 * Doubly internal
 	 */
 	@Internal
-	Map<PersistentCollection<?>,CollectionEntry> getCollectionEntries();
+	@Nullable Map<PersistentCollection<?>,CollectionEntry> getCollectionEntries();
 
 	/**
 	 * Execute some action on each entry of the collectionEntries map, optionally iterating on a defensive copy.
@@ -743,6 +756,9 @@ public interface PersistenceContext {
 	void setReadOnly(Object entityOrProxy, boolean readOnly);
 
 	void replaceDelayedEntityIdentityInsertKeys(EntityKey oldKey, Object generatedId);
+
+	@Internal
+	void replaceEntityEntryRowId(Object entity, Object rowId);
 
 	/**
 	 * Add a child/parent relation to cache for cascading op

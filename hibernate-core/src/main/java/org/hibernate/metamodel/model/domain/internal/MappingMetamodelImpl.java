@@ -72,6 +72,7 @@ import org.hibernate.sql.ast.tree.from.TableGroup;
 import org.hibernate.type.BasicType;
 import org.hibernate.type.ComponentType;
 import org.hibernate.type.Type;
+import org.hibernate.type.descriptor.java.EnumJavaType;
 import org.hibernate.type.descriptor.java.JavaType;
 import org.hibernate.type.descriptor.java.spi.JavaTypeRegistry;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
@@ -177,7 +178,7 @@ public class MappingMetamodelImpl extends QueryParameterBindingTypeResolverImpl
 		bootModel.getEntityBindings().forEach( persistentClass -> persistentClass.prepareForMappingModel( context ) );
 
 		final PersisterFactory persisterFactory =
-				jpaMetamodel.getServiceRegistry().getService( PersisterFactory.class );
+				jpaMetamodel.getServiceRegistry().requireService( PersisterFactory.class );
 		final CacheImplementor cache = context.getCache();
 		processBootEntities(
 				bootModel.getEntityBindings(),
@@ -489,8 +490,18 @@ public class MappingMetamodelImpl extends QueryParameterBindingTypeResolverImpl
 	}
 
 	@Override
+	public <X> ManagedDomainType<X> managedType(String typeName) {
+		return jpaMetamodel.managedType( typeName );
+	}
+
+	@Override
 	public <X> EntityDomainType<X> entity(String entityName) {
 		return jpaMetamodel.entity( entityName );
+	}
+
+	@Override
+	public <X> EmbeddableDomainType<X> embeddable(String embeddableName) {
+		return jpaMetamodel.embeddable( embeddableName );
 	}
 
 	@Override
@@ -519,8 +530,28 @@ public class MappingMetamodelImpl extends QueryParameterBindingTypeResolverImpl
 	}
 
 	@Override
-	public Map<String, Map<Class<?>, Enum<?>>> getAllowedEnumLiteralTexts() {
-		return jpaMetamodel.getAllowedEnumLiteralTexts();
+	public Set<String> getEnumTypesForValue(String enumValue) {
+		return jpaMetamodel.getEnumTypesForValue(enumValue);
+	}
+
+	@Override
+	public JavaType<?> getJavaConstantType(String className, String fieldName) {
+		return jpaMetamodel.getJavaConstantType( className, fieldName );
+	}
+
+	@Override
+	public <T> T getJavaConstant(String className, String fieldName) {
+		return jpaMetamodel.getJavaConstant( className, fieldName );
+	}
+
+	@Override
+	public EnumJavaType<?> getEnumType(String className) {
+		return jpaMetamodel.getEnumType(className);
+	}
+
+	@Override
+	public <E extends Enum<E>> E enumValue(EnumJavaType<E> enumType, String enumValueName) {
+		return jpaMetamodel.enumValue( enumType, enumValueName );
 	}
 
 	@Override
@@ -534,7 +565,7 @@ public class MappingMetamodelImpl extends QueryParameterBindingTypeResolverImpl
 
 		try {
 			final Class<?> clazz =
-					jpaMetamodel.getServiceRegistry().getService( ClassLoaderService.class )
+					jpaMetamodel.getServiceRegistry().requireService( ClassLoaderService.class )
 							.classForName( className );
 			implementors = doGetImplementors( clazz );
 			if ( implementors.length > 0 ) {
@@ -774,13 +805,12 @@ public class MappingMetamodelImpl extends QueryParameterBindingTypeResolverImpl
 			return (BasicType<?>) sqmExpressible;
 		}
 
-		if ( sqmExpressible instanceof BasicDomainType ) {
-			final BasicDomainType<?> domainType = (BasicDomainType<?>) sqmExpressible;
-			return getTypeConfiguration().getBasicTypeForJavaType( domainType.getExpressibleJavaType().getJavaTypeClass() );
+		if ( sqmExpressible instanceof BasicDomainType<?> ) {
+			return getTypeConfiguration().getBasicTypeForJavaType( sqmExpressible.getRelationalJavaType().getJavaType() );
 		}
 
 		if ( sqmExpressible instanceof BasicSqmPathSource<?> ) {
-			return getTypeConfiguration().getBasicTypeForJavaType(((BasicSqmPathSource<?>) sqmExpressible).getJavaType());
+			return resolveMappingExpressible( sqmExpressible.getSqmType(), tableGroupLocator );
 		}
 
 		if ( sqmExpressible instanceof SqmFieldLiteral ) {

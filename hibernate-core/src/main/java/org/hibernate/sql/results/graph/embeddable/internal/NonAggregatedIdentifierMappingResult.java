@@ -9,10 +9,9 @@ package org.hibernate.sql.results.graph.embeddable.internal;
 import org.hibernate.metamodel.mapping.NonAggregatedIdentifierMapping;
 import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.results.graph.AssemblerCreationState;
-import org.hibernate.sql.results.graph.DomainResultAssembler;
 import org.hibernate.sql.results.graph.DomainResultCreationState;
-import org.hibernate.sql.results.graph.FetchParentAccess;
-import org.hibernate.sql.results.graph.embeddable.EmbeddableInitializer;
+import org.hibernate.sql.results.graph.Initializer;
+import org.hibernate.sql.results.graph.InitializerParent;
 
 public class NonAggregatedIdentifierMappingResult<T> extends EmbeddableResultImpl<T> {
 	public NonAggregatedIdentifierMappingResult(
@@ -24,22 +23,10 @@ public class NonAggregatedIdentifierMappingResult<T> extends EmbeddableResultImp
 	}
 
 	@Override
-	public DomainResultAssembler<T> createResultAssembler(
-			FetchParentAccess parentAccess,
+	public Initializer<?> createInitializer(
+			EmbeddableResultImpl<T> resultGraphNode,
+			InitializerParent<?> parent,
 			AssemblerCreationState creationState) {
-		final EmbeddableInitializer initializer = creationState.resolveInitializer(
-				getNavigablePath().append( "{embeddable_result}" ),
-				getReferencedModePart(),
-				() -> new NonAggregatedIdentifierMappingResultInitializer(
-						this,
-						parentAccess,
-						creationState
-				)
-		).asEmbeddableInitializer();
-
-		assert initializer != null;
-
-		//noinspection unchecked
-		return new EmbeddableAssembler( initializer );
+		return new NonAggregatedIdentifierMappingInitializer( resultGraphNode, parent, creationState, true );
 	}
 }

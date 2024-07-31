@@ -8,6 +8,7 @@ package org.hibernate.orm.test.function.array;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 import org.hibernate.query.criteria.JpaCriteriaQuery;
 import org.hibernate.query.criteria.JpaRoot;
@@ -17,6 +18,7 @@ import org.hibernate.testing.jdbc.SharedDriverManagerTypeCacheClearingIntegrator
 import org.hibernate.testing.orm.junit.BootstrapServiceRegistry;
 import org.hibernate.testing.orm.junit.DialectFeatureChecks;
 import org.hibernate.testing.orm.junit.DomainModel;
+import org.hibernate.testing.orm.junit.Jira;
 import org.hibernate.testing.orm.junit.RequiresDialectFeature;
 import org.hibernate.testing.orm.junit.SessionFactory;
 import org.hibernate.testing.orm.junit.SessionFactoryScope;
@@ -86,6 +88,15 @@ public class ArrayPositionTest {
 	}
 
 	@Test
+	@Jira("https://hibernate.atlassian.net/browse/HHH-17801")
+	public void testEnumPosition(SessionFactoryScope scope) {
+		scope.inSession( em -> {
+			em.createQuery( "from EntityWithArrays e where array_position(e.theLabels, e.theLabel) > 0", EntityWithArrays.class )
+					.getResultList();
+		} );
+	}
+
+	@Test
 	public void testNodeBuilderArray(SessionFactoryScope scope) {
 		scope.inSession( em -> {
 			final NodeBuilder cb = (NodeBuilder) em.getCriteriaBuilder();
@@ -120,6 +131,18 @@ public class ArrayPositionTest {
 			// Should all fail to compile
 //			cb.collectionPosition( root.<Collection<Integer>>get( "theCollection" ), cb.literal( "xyz" ) );
 //			cb.collectionPosition( root.<Collection<Integer>>get( "theCollection" ), "xyz" );
+		} );
+	}
+
+	@Test
+	public void testPositionOverload(SessionFactoryScope scope) {
+		scope.inSession( em -> {
+			//tag::hql-array-position-hql-example[]
+			List<EntityWithArrays> results = em.createQuery( "from EntityWithArrays e where position('abc' in e.theArray) = 1", EntityWithArrays.class )
+					.getResultList();
+			//end::hql-array-position-hql-example[]
+			assertEquals( 1, results.size() );
+			assertEquals( 2L, results.get( 0 ).getId() );
 		} );
 	}
 

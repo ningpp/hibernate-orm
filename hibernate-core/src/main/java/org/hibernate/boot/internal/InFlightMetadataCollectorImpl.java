@@ -18,7 +18,9 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
+import org.hibernate.AnnotationException;
 import org.hibernate.AssertionFailure;
 import org.hibernate.DuplicateMappingException;
 import org.hibernate.HibernateException;
@@ -53,7 +55,6 @@ import org.hibernate.boot.model.internal.SecondaryTableFromAnnotationSecondPass;
 import org.hibernate.boot.model.internal.SecondaryTableSecondPass;
 import org.hibernate.boot.model.internal.SetBasicValueTypeSecondPass;
 import org.hibernate.boot.model.naming.Identifier;
-import org.hibernate.boot.model.naming.ImplicitForeignKeyNameSource;
 import org.hibernate.boot.model.relational.AuxiliaryDatabaseObject;
 import org.hibernate.boot.model.relational.Database;
 import org.hibernate.boot.model.relational.ExportableProducer;
@@ -96,6 +97,7 @@ import org.hibernate.mapping.RootClass;
 import org.hibernate.mapping.SimpleValue;
 import org.hibernate.mapping.Table;
 import org.hibernate.metamodel.CollectionClassification;
+import org.hibernate.metamodel.mapping.DiscriminatorType;
 import org.hibernate.metamodel.spi.EmbeddableInstantiator;
 import org.hibernate.query.named.NamedObjectRepository;
 import org.hibernate.query.sqm.function.SqmFunctionDescriptor;
@@ -111,8 +113,7 @@ import jakarta.persistence.Embeddable;
 import jakarta.persistence.Entity;
 import jakarta.persistence.MapsId;
 
-import static java.util.Collections.emptyList;
-import static org.hibernate.internal.util.collections.CollectionHelper.arrayList;
+import static org.hibernate.boot.model.naming.Identifier.toIdentifier;
 
 /**
  * The implementation of the {@linkplain InFlightMetadataCollector in-flight
@@ -137,6 +138,8 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 	private final Map<String,PersistentClass> entityBindingMap = new HashMap<>();
 	private final List<Component> composites = new ArrayList<>();
 	private final Map<Class<?>, Component> genericComponentsMap = new HashMap<>();
+	private final Map<XClass, List<XClass>> embeddableSubtypes = new HashMap<>();
+	private final Map<Class<?>, DiscriminatorType<?>> embeddableDiscriminatorTypesMap = new HashMap<>();
 	private final Map<String,Collection> collectionBindingMap = new HashMap<>();
 
 	private final Map<String, FilterDefinition> filterDefinitionMap = new HashMap<>();
@@ -284,6 +287,24 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 	@Override
 	public Component getGenericComponent(Class<?> componentClass) {
 		return genericComponentsMap.get( componentClass );
+	}
+
+	@Override
+	public void registerEmbeddableSubclass(XClass superclass, XClass subclass) {
+		embeddableSubtypes.computeIfAbsent( superclass, c -> new ArrayList<>() ).add( subclass );
+	}
+
+	@Override
+	public List<XClass> getEmbeddableSubclasses(XClass superclass) {
+		final List<XClass> subclasses = embeddableSubtypes.get( superclass );
+		return subclasses != null ? subclasses : List.of();
+	}
+
+	@Override
+	public DiscriminatorType<?> resolveEmbeddableDiscriminatorType(
+			Class<?> embeddableClass,
+			Supplier<DiscriminatorType<?>> supplier) {
+		return embeddableDiscriminatorTypesMap.computeIfAbsent( embeddableClass, k -> supplier.get() );
 	}
 
 	@Override
@@ -1251,9 +1272,18 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 
 	private static AnnotatedClassType getAnnotatedClassType(XClass clazz) {
 		if ( clazz.isAnnotationPresent( Entity.class ) ) {
+			if ( clazz.isAnnotationPresent( Embeddable.class ) ) {
+				throw new AnnotationException( "Invalid class annotated both '@Entity' and '@Embeddable': '" + clazz.getName() + "'" );
+			}
+			else if ( clazz.isAnnotationPresent( jakarta.persistence.MappedSuperclass.class ) ) {
+				throw new AnnotationException( "Invalid class annotated both '@Entity' and '@MappedSuperclass': '" + clazz.getName() + "'" );
+			}
 			return AnnotatedClassType.ENTITY;
 		}
 		else if ( clazz.isAnnotationPresent( Embeddable.class ) ) {
+			if ( clazz.isAnnotationPresent( jakarta.persistence.MappedSuperclass.class ) ) {
+				throw new AnnotationException( "Invalid class annotated both '@Embeddable' and '@MappedSuperclass': '" + clazz.getName() + "'" );
+			}
 			return AnnotatedClassType.EMBEDDABLE;
 		}
 		else if ( clazz.isAnnotationPresent( jakarta.persistence.MappedSuperclass.class ) ) {
@@ -1266,7 +1296,6 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 			return AnnotatedClassType.NONE;
 		}
 	}
-
 
 	@Override
 	public void addMappedSuperclass(Class<?> type, MappedSuperclass mappedSuperclass) {
@@ -1509,32 +1538,30 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 
 		@Override
 		public void addSecondaryTable(QualifiedTableName logicalQualifiedTableName, Join secondaryTableJoin) {
-			Identifier logicalName = logicalQualifiedTableName.getTableName();
 			if ( Identifier.areEqual(
-				Identifier.toIdentifier(
+				toIdentifier(
 					new QualifiedTableName(
-						Identifier.toIdentifier( primaryTable.getCatalog() ),
-						Identifier.toIdentifier( primaryTable.getSchema() ),
+						toIdentifier( primaryTable.getCatalog() ),
+						toIdentifier( primaryTable.getSchema() ),
 						primaryTableLogicalName
 					).render()
 				),
-				Identifier.toIdentifier( logicalQualifiedTableName.render() ) ) ) {
-				throw new DuplicateSecondaryTableException( logicalName );
+				toIdentifier( logicalQualifiedTableName.render() ) ) ) {
+				throw new DuplicateSecondaryTableException( logicalQualifiedTableName.getTableName() );
 			}
-
 
 			if ( secondaryTableJoinMap == null ) {
 				//secondaryTableJoinMap = new HashMap<Identifier,Join>();
 				//secondaryTableJoinMap.put( logicalName, secondaryTableJoin );
 				secondaryTableJoinMap = new HashMap<>();
-				secondaryTableJoinMap.put( logicalName.getCanonicalName(), secondaryTableJoin );
+				secondaryTableJoinMap.put( logicalQualifiedTableName.getTableName().getCanonicalName(), secondaryTableJoin );
 			}
 			else {
 				//final Join existing = secondaryTableJoinMap.put( logicalName, secondaryTableJoin );
-				final Join existing = secondaryTableJoinMap.put( logicalName.getCanonicalName(), secondaryTableJoin );
+				final Join existing = secondaryTableJoinMap.put( logicalQualifiedTableName.getTableName().getCanonicalName(), secondaryTableJoin );
 
 				if ( existing != null ) {
-					throw new DuplicateSecondaryTableException( logicalName );
+					throw new DuplicateSecondaryTableException( logicalQualifiedTableName.getTableName() );
 				}
 			}
 		}
@@ -1760,7 +1787,6 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 			processSecondPasses( idGeneratorResolverSecondPassList );
 			processSecondPasses( implicitColumnNamingSecondPassList );
 			processSecondPasses( setBasicValueTypeSecondPassList );
-			processSecondPasses( aggregateComponentSecondPassList );
 			processSecondPasses( toOneJoinTableSecondPassList );
 
 			composites.forEach( Component::sortProperties );
@@ -1776,6 +1802,7 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 
 			processPropertyReferences();
 
+			processSecondPasses( aggregateComponentSecondPassList );
 			secondPassCompileForeignKeys( buildingContext );
 
 			processNaturalIdUniqueKeyBinders();
@@ -1935,26 +1962,16 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 
 	protected void secondPassCompileForeignKeys(Table table, Set<ForeignKey> done, MetadataBuildingContext buildingContext)
 			throws MappingException {
-		table.createForeignKeys();
+		table.createForeignKeys( buildingContext );
 
 		final Dialect dialect = getDatabase().getJdbcEnvironment().getDialect();
 		for ( ForeignKey foreignKey : table.getForeignKeys().values() ) {
 			if ( !done.contains( foreignKey ) ) {
 				done.add( foreignKey );
-				final String referencedEntityName = foreignKey.getReferencedEntityName();
-				if ( referencedEntityName == null ) {
-					throw new MappingException( "An association from the table '" + foreignKey.getTable().getName() +
-							"' does not specify the referenced entity" );
-				}
+				final PersistentClass referencedClass = foreignKey.resolveReferencedClass(this);
 
-				log.debugf( "Resolving reference to class: %s", referencedEntityName );
-				final PersistentClass referencedClass = getEntityBinding( referencedEntityName );
-				if ( referencedClass == null ) {
-					throw new MappingException( "An association from the table '" + foreignKey.getTable().getName() +
-							"' refers to an unmapped class '" + referencedEntityName + "'" );
-				}
 				if ( referencedClass.isJoinedSubclass() ) {
-					secondPassCompileForeignKeys( referencedClass.getSuperclass().getTable(), done, buildingContext );
+					secondPassCompileForeignKeys( referencedClass.getSuperclass().getTable(), done, buildingContext);
 				}
 
 				// the ForeignKeys created in the first pass did not have their referenced table initialized
@@ -1969,19 +1986,6 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 				foreignKey.alignColumns();
 			}
 		}
-	}
-
-	private List<Identifier> extractColumnNames(List<Column> columns) {
-		if ( columns == null || columns.isEmpty() ) {
-			return emptyList();
-		}
-
-		final List<Identifier> columnNames = arrayList( columns.size() );
-		for ( Column column : columns ) {
-			columnNames.add( getDatabase().toIdentifier( column.getQuotedName() ) );
-		}
-		return columnNames;
-
 	}
 
 	private void processPropertyReferences() {
@@ -2087,6 +2091,7 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 					entityBindingMap,
 					composites,
 					genericComponentsMap,
+					embeddableDiscriminatorTypesMap,
 					mappedSuperClasses,
 					collectionBindingMap,
 					typeDefRegistry.copyRegistrationMap(),
@@ -2171,55 +2176,6 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector,
 			// try to build a SF.  Here, just building the Metadata, it is "ok" for an
 			// exception to occur, the same exception will happen later as we build the SF.
 			log.debugf( "Ignoring exception thrown when trying to build IdentifierGenerator as part of Metadata building", e );
-		}
-	}
-
-	private class ForeignKeyNameSource implements ImplicitForeignKeyNameSource {
-		final List<Identifier> columnNames;
-		private final ForeignKey foreignKey;
-		private final Table table;
-		private final MetadataBuildingContext buildingContext;
-		List<Identifier> referencedColumnNames;
-
-		public ForeignKeyNameSource(ForeignKey foreignKey, Table table, MetadataBuildingContext buildingContext) {
-			this.foreignKey = foreignKey;
-			this.table = table;
-			this.buildingContext = buildingContext;
-			columnNames = extractColumnNames(foreignKey.getColumns());
-			referencedColumnNames = null;
-		}
-
-		@Override
-		public Identifier getTableName() {
-			return table.getNameIdentifier();
-		}
-
-		@Override
-		public List<Identifier> getColumnNames() {
-			return columnNames;
-		}
-
-		@Override
-		public Identifier getReferencedTableName() {
-			return foreignKey.getReferencedTable().getNameIdentifier();
-		}
-
-		@Override
-		public List<Identifier> getReferencedColumnNames() {
-			if ( referencedColumnNames == null ) {
-				referencedColumnNames = extractColumnNames( foreignKey.getReferencedColumns() );
-			}
-			return referencedColumnNames;
-		}
-
-		@Override
-		public Identifier getUserProvidedIdentifier() {
-			return foreignKey.getName() != null ? Identifier.toIdentifier( foreignKey.getName() ) : null;
-		}
-
-		@Override
-		public MetadataBuildingContext getBuildingContext() {
-			return buildingContext;
 		}
 	}
 }

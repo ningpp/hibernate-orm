@@ -8,6 +8,7 @@ package org.hibernate.engine.jdbc.connections.spi;
 import java.sql.Connection;
 import java.sql.SQLException;
 
+import org.hibernate.engine.jdbc.connections.internal.DatabaseConnectionInfoImpl;
 import org.hibernate.service.Service;
 import org.hibernate.service.spi.Wrapped;
 
@@ -45,12 +46,12 @@ public interface ConnectionProvider extends Service, Wrapped {
 	/**
 	 * Release a connection from Hibernate use.
 	 *
-	 * @param conn The JDBC connection to release
+	 * @param connection The JDBC connection to release
 	 *
 	 * @throws SQLException Indicates a problem closing the connection
 	 * @throws org.hibernate.HibernateException Indicates a problem otherwise releasing a connection.
 	 */
-	void closeConnection(Connection conn) throws SQLException;
+	void closeConnection(Connection connection) throws SQLException;
 
 	/**
 	 * Does this connection provider support aggressive release of JDBC connections and later
@@ -62,11 +63,16 @@ public interface ConnectionProvider extends Service, Wrapped {
 	 * <p>
 	 * Typically, this is only true in managed environments where a container tracks connections
 	 * by transaction or thread.
-	 *
+	 * <p>
 	 * Note that JTA semantic depends on the fact that the underlying connection provider does
 	 * support aggressive release.
 	 *
 	 * @return {@code true} if aggressive releasing is supported; {@code false} otherwise.
 	 */
 	boolean supportsAggressiveRelease();
+
+	default DatabaseConnectionInfo getDatabaseConnectionInfo() {
+		return new DatabaseConnectionInfoImpl();
+	}
+
 }

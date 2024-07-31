@@ -42,7 +42,7 @@ public class DB2iDialect extends DB2Dialect {
 	final static DatabaseVersion DB2_LUW_VERSION = DB2Dialect.MINIMUM_VERSION;
 
 	public DB2iDialect(DialectResolutionInfo info) {
-		this( info.makeCopy() );
+		this( info.makeCopyOrDefault( MINIMUM_VERSION ) );
 		registerKeywords( info );
 	}
 
@@ -88,6 +88,11 @@ public class DB2iDialect extends DB2Dialect {
 	}
 
 	@Override
+	public boolean supportsIfExistsBeforeTableName() {
+		return false;
+	}
+
+	@Override
 	public boolean supportsDistinctFromPredicate() {
 		return true;
 	}
@@ -128,16 +133,6 @@ public class DB2iDialect extends DB2Dialect {
 
 	@Override
 	public boolean supportsSkipLocked() {
-		return true;
-	}
-
-	@Override
-	public boolean supportsLateral() {
-		return true;
-	}
-
-	@Override
-	public boolean supportsRecursiveCTE() {
 		return true;
 	}
 

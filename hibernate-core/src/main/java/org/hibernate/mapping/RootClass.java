@@ -7,7 +7,6 @@
 package org.hibernate.mapping;
 
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 
@@ -52,6 +51,7 @@ public class RootClass extends PersistentClass implements TableOwner, SoftDeleta
 	private boolean explicitPolymorphism;
 	private Class<? extends EntityPersister> entityPersisterClass;
 	private boolean forceDiscriminator;
+	private boolean concreteProxy;
 	private String where;
 	private Table table;
 	private boolean discriminatorInsertable = true;
@@ -105,6 +105,10 @@ public class RootClass extends PersistentClass implements TableOwner, SoftDeleta
 	@Override
 	public boolean hasIdentifierProperty() {
 		return identifierProperty != null;
+	}
+
+	public boolean hasDiscriminator() {
+		return discriminator != null;
 	}
 
 	@Override
@@ -257,6 +261,15 @@ public class RootClass extends PersistentClass implements TableOwner, SoftDeleta
 
 	public void setForceDiscriminator(boolean forceDiscriminator) {
 		this.forceDiscriminator = forceDiscriminator;
+	}
+
+	@Override
+	public boolean isConcreteProxy() {
+		return concreteProxy;
+	}
+
+	public void setConcreteProxy(boolean concreteProxy) {
+		this.concreteProxy = concreteProxy;
 	}
 
 	@Override

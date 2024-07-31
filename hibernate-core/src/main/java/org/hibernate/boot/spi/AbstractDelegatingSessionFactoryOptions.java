@@ -15,6 +15,7 @@ import org.hibernate.EntityNameResolver;
 import org.hibernate.Interceptor;
 import org.hibernate.SessionFactoryObserver;
 import org.hibernate.TimeZoneStorageStrategy;
+import org.hibernate.annotations.CacheLayout;
 import org.hibernate.boot.SchemaAutoTooling;
 import org.hibernate.boot.TempTableDdlTransactionHandling;
 import org.hibernate.boot.registry.StandardServiceRegistry;
@@ -254,6 +255,11 @@ public class AbstractDelegatingSessionFactoryOptions implements SessionFactoryOp
 	}
 
 	@Override
+	public CacheLayout getQueryCacheLayout() {
+		return delegate.getQueryCacheLayout();
+	}
+
+	@Override
 	public TimestampsCacheFactory getTimestampsCacheFactory() {
 		return delegate.getTimestampsCacheFactory();
 	}
@@ -423,6 +429,11 @@ public class AbstractDelegatingSessionFactoryOptions implements SessionFactoryOp
 	}
 
 	@Override
+	public boolean isPortableIntegerDivisionEnabled() {
+		return delegate.isPortableIntegerDivisionEnabled();
+	}
+
+	@Override
 	public int getQueryStatisticsMaxSize() {
 		return delegate.getQueryStatisticsMaxSize();
 	}
@@ -435,6 +446,11 @@ public class AbstractDelegatingSessionFactoryOptions implements SessionFactoryOp
 	@Override
 	public boolean isCollectionsInDefaultFetchGroupEnabled() {
 		return delegate.isCollectionsInDefaultFetchGroupEnabled();
+	}
+
+	@Override
+	public boolean isUnownedAssociationTransientCheck() {
+		return delegate.isUnownedAssociationTransientCheck();
 	}
 
 	@Override
@@ -475,6 +491,16 @@ public class AbstractDelegatingSessionFactoryOptions implements SessionFactoryOp
 	@Override
 	public TimeZoneStorageStrategy getDefaultTimeZoneStorageStrategy() {
 		return delegate.getDefaultTimeZoneStorageStrategy();
+	}
+
+	@Override
+	public boolean isPreferJavaTimeJdbcTypesEnabled() {
+		return delegate.isPreferJavaTimeJdbcTypesEnabled();
+	}
+
+	@Override
+	public boolean isPreferNativeEnumTypesEnabled() {
+		return delegate.isPreferNativeEnumTypesEnabled();
 	}
 
 	@Override

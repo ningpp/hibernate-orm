@@ -100,9 +100,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 	private final DeleteRowsCoordinator deleteRowsCoordinator;
 	private final RemoveCoordinator removeCoordinator;
 
-	private final boolean cascadeDeleteEnabled;
 	private final boolean keyIsNullable;
-	private final boolean keyIsUpdateable;
 	private final MutationExecutorService mutationExecutorService;
 
 	@Deprecated(since = "6.0")
@@ -118,10 +116,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 			CollectionDataAccess cacheAccessStrategy,
 			RuntimeModelCreationContext creationContext) throws MappingException, CacheException {
 		super( collectionBinding, cacheAccessStrategy, creationContext );
-		cascadeDeleteEnabled = collectionBinding.getKey().isCascadeDeleteEnabled()
-				&& creationContext.getDialect().supportsCascadeDelete();
 		keyIsNullable = collectionBinding.getKey().isNullable();
-		keyIsUpdateable = collectionBinding.getKey().isUpdateable();
 
 		this.rowMutationOperations = buildRowMutationOperations();
 
@@ -156,16 +151,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 
 	@Override
 	protected boolean isRowDeleteEnabled() {
-		return keyIsUpdateable && keyIsNullable;
-	}
-
-	@Override
-	protected boolean isRowInsertEnabled() {
-		return keyIsUpdateable;
-	}
-
-	public boolean isCascadeDeleteEnabled() {
-		return cascadeDeleteEnabled;
+		return super.isRowDeleteEnabled() && keyIsNullable;
 	}
 
 	@Override
@@ -233,7 +219,8 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 		final JdbcValueBindings jdbcValueBindings = mutationExecutor.getJdbcValueBindings();
 
 		try {
-			int nextIndex = resetIndex ? 0 : getSize( key, session );
+			int nextIndex = ( resetIndex ? 0 : getSize( key, session ) ) +
+					Math.max( getAttributeMapping().getIndexMetadata().getListIndexBase(), 0 );
 
 			while ( entries.hasNext() ) {
 				final Object entry = entries.next();

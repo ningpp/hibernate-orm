@@ -6,8 +6,10 @@
  */
 package org.hibernate.dialect;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.Reader;
 import java.sql.Blob;
 import java.sql.CallableStatement;
 import java.sql.Clob;
@@ -40,6 +42,7 @@ import java.util.TimeZone;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
+import org.hibernate.HibernateException;
 import org.hibernate.Incubating;
 import org.hibernate.Length;
 import org.hibernate.LockMode;
@@ -65,8 +68,6 @@ import org.hibernate.dialect.function.InsertSubstringOverlayEmulation;
 import org.hibernate.dialect.function.LocatePositionEmulation;
 import org.hibernate.dialect.function.LpadRpadPadEmulation;
 import org.hibernate.dialect.function.SqlFunction;
-import org.hibernate.dialect.function.TimestampaddFunction;
-import org.hibernate.dialect.function.TimestampdiffFunction;
 import org.hibernate.dialect.function.TrimFunction;
 import org.hibernate.dialect.identity.IdentityColumnSupport;
 import org.hibernate.dialect.identity.IdentityColumnSupportImpl;
@@ -107,7 +108,6 @@ import org.hibernate.internal.CoreMessageLogger;
 import org.hibernate.internal.util.MathHelper;
 import org.hibernate.internal.util.StringHelper;
 import org.hibernate.internal.util.collections.ArrayHelper;
-import org.hibernate.internal.util.io.StreamCopier;
 import org.hibernate.loader.ast.spi.MultiKeyLoadSizingStrategy;
 import org.hibernate.mapping.Column;
 import org.hibernate.mapping.Constraint;
@@ -179,7 +179,6 @@ import org.hibernate.type.descriptor.jdbc.BlobJdbcType;
 import org.hibernate.type.descriptor.jdbc.ClobJdbcType;
 import org.hibernate.type.descriptor.jdbc.JdbcLiteralFormatter;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
-import org.hibernate.type.descriptor.jdbc.JdbcTypeConstructor;
 import org.hibernate.type.descriptor.jdbc.LongNVarcharJdbcType;
 import org.hibernate.type.descriptor.jdbc.NCharJdbcType;
 import org.hibernate.type.descriptor.jdbc.NClobJdbcType;
@@ -198,6 +197,7 @@ import org.hibernate.type.spi.TypeConfiguration;
 import org.jboss.logging.Logger;
 
 import jakarta.persistence.TemporalType;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 import static java.lang.Math.ceil;
 import static java.lang.Math.log;
@@ -237,6 +237,7 @@ import static org.hibernate.type.SqlTypes.TIME_WITH_TIMEZONE;
 import static org.hibernate.type.SqlTypes.TINYINT;
 import static org.hibernate.type.SqlTypes.VARBINARY;
 import static org.hibernate.type.SqlTypes.VARCHAR;
+import static org.hibernate.type.SqlTypes.isEnumType;
 import static org.hibernate.type.SqlTypes.isFloatOrRealOrDouble;
 import static org.hibernate.type.SqlTypes.isNumericOrDecimal;
 import static org.hibernate.type.SqlTypes.isVarbinaryType;
@@ -283,7 +284,7 @@ import static org.hibernate.type.descriptor.converter.internal.EnumHelper.getEnu
  * passed to the constructor, and by the {@link #getVersion()} property.
  * <p>
  * Programs using Hibernate should migrate away from the use of versioned
- * dialect classes like, for example, {@link MySQL8Dialect}. These
+ * dialect classes like, for example, {@code MySQL8Dialect}. These
  * classes are now deprecated and will be removed in a future release.
  * <p>
  * A custom {@code Dialect} may be specified using the configuration
@@ -339,7 +340,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	}
 
 	protected Dialect(DialectResolutionInfo info) {
-		this.version = info.makeCopy();
+		this.version = info.makeCopyOrDefault( getMinimumSupportedVersion() );
 		checkVersion();
 		registerDefaultKeywords();
 		registerKeywords(info);
@@ -725,22 +726,18 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 			int scale,
 			JdbcTypeRegistry jdbcTypeRegistry) {
 		if ( jdbcTypeCode == ARRAY ) {
-			final JdbcTypeConstructor jdbcTypeConstructor = jdbcTypeRegistry.getConstructor( jdbcTypeCode );
-			if ( jdbcTypeConstructor != null ) {
-				// Special handling for array types, because we need the proper element/component type
-				// To determine the element JdbcType, we pass the database reported type to #resolveSqlTypeCode
-				final int arraySuffixIndex = columnTypeName.toLowerCase( Locale.ROOT ).indexOf( " array" );
-				if ( arraySuffixIndex != -1 ) {
-					final String componentTypeName = columnTypeName.substring( 0, arraySuffixIndex );
-					final Integer sqlTypeCode = resolveSqlTypeCode( componentTypeName, jdbcTypeRegistry.getTypeConfiguration() );
-					if ( sqlTypeCode != null ) {
-						return jdbcTypeConstructor.resolveType(
-								jdbcTypeRegistry.getTypeConfiguration(),
-								this,
-								jdbcTypeRegistry.getDescriptor( sqlTypeCode ),
-								ColumnTypeInformation.EMPTY
-						);
-					}
+			// Special handling for array types, because we need the proper element/component type
+			// To determine the element JdbcType, we pass the database reported type to #resolveSqlTypeCode
+			final int arraySuffixIndex = columnTypeName.toLowerCase( Locale.ROOT ).indexOf( " array" );
+			if ( arraySuffixIndex != -1 ) {
+				final String componentTypeName = columnTypeName.substring( 0, arraySuffixIndex );
+				final Integer sqlTypeCode = resolveSqlTypeCode( componentTypeName, jdbcTypeRegistry.getTypeConfiguration() );
+				if ( sqlTypeCode != null ) {
+					return jdbcTypeRegistry.resolveTypeConstructorDescriptor(
+							jdbcTypeCode,
+							jdbcTypeRegistry.getDescriptor( sqlTypeCode ),
+							ColumnTypeInformation.EMPTY
+					);
 				}
 			}
 		}
@@ -767,14 +764,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 			int precision,
 			int scale,
 			int displaySize) {
-		// It seems MariaDB/MySQL return the precision in bytes depending on the charset,
-		// so to detect whether we have a single character here, we check the display size
-		if ( jdbcTypeCode == Types.CHAR && precision <= 4 ) {
-			return displaySize;
-		}
-		else {
-			return precision;
-		}
+		return precision;
 	}
 
 	/**
@@ -812,7 +802,8 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 
 	/**
 	 * Render a SQL check condition for a column that represents an enumerated value
-	 * by its {@linkplain jakarta.persistence.EnumType#STRING string representation}.
+	 * by its {@linkplain jakarta.persistence.EnumType#STRING string representation}
+	 * or a given list of values (with NULL value allowed).
 	 *
 	 * @return a SQL expression that will occur in a {@code check} constraint
 	 */
@@ -820,11 +811,20 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 		StringBuilder check = new StringBuilder();
 		check.append( columnName ).append( " in (" );
 		String separator = "";
+		boolean nullIsValid = false;
 		for ( String value : values ) {
+			if ( value == null ) {
+				nullIsValid = true;
+				continue;
+			}
 			check.append( separator ).append('\'').append( value ).append('\'');
 			separator = ",";
 		}
-		return check.append( ')' ).toString();
+		check.append( ')' );
+		if ( nullIsValid ) {
+			check.append( " or " ).append( columnName ).append( " is null" );
+		}
+		return check.toString();
 	}
 
 	public String getCheckCondition(String columnName, Class<? extends Enum<?>> enumType) {
@@ -846,16 +846,42 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 * by its {@linkplain jakarta.persistence.EnumType#ORDINAL ordinal representation}.
 	 *
 	 * @return a SQL expression that will occur in a {@code check} constraint
+	 * @deprecated use {@link #getCheckCondition(String, Long[])} instead
 	 */
+	@Deprecated(forRemoval = true)
 	public String getCheckCondition(String columnName, long[] values) {
+		Long[] boxedValues = new Long[values.length];
+		for ( int i = 0; i<values.length; i++ ) {
+			boxedValues[i] = values[i];
+		}
+		return getCheckCondition( columnName, boxedValues );
+	}
+
+	/**
+	 * Render a SQL check condition for a column that represents an enumerated value
+	 * by its {@linkplain jakarta.persistence.EnumType#ORDINAL ordinal representation}
+	 * or a given list of values.
+	 *
+	 * @return a SQL expression that will occur in a {@code check} constraint
+	 */
+	public String getCheckCondition(String columnName, Long[] values) {
 		StringBuilder check = new StringBuilder();
 		check.append( columnName ).append( " in (" );
 		String separator = "";
-		for ( long value : values ) {
+		boolean nullIsValid = false;
+		for ( Long value : values ) {
+			if ( value == null ) {
+				nullIsValid = true;
+				continue;
+			}
 			check.append( separator ).append( value );
 			separator = ",";
 		}
-		return check.append( ')' ).toString();
+		check.append( ')' );
+		if ( nullIsValid ) {
+			check.append( " or " ).append( columnName ).append( " is null" );
+		}
+		return check.toString();
 	}
 
 	@Override
@@ -988,6 +1014,9 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 * <li> <code>greatest(arg0, arg1, ...)</code>
 	 * <li> <code>degrees(arg)</code>
 	 * <li> <code>radians(arg)</code>
+	 * <li> <code>bitand(arg1, arg1)</code>
+	 * <li> <code>bitor(arg1, arg1)</code>
+	 * <li> <code>bitxor(arg1, arg1)</code>
 	 * </ul>
 	 *
 	 * <ul>
@@ -1055,7 +1084,6 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 
 		functionFactory.math();
 		functionFactory.round();
-
 
 		//trig functions supported on almost every database
 
@@ -1192,11 +1220,8 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 
 		//timestampadd()/timestampdiff() delegated back to the Dialect itself
 		//since there is a great variety of different ways to emulate them
-
-		functionContributions.getFunctionRegistry().register( "timestampadd",
-				new TimestampaddFunction( this, typeConfiguration ) );
-		functionContributions.getFunctionRegistry().register( "timestampdiff",
-				new TimestampdiffFunction( this, typeConfiguration ) );
+		//by default, we don't allow plain parameters for the timestamp argument as most database don't support this
+		functionFactory.timestampaddAndDiff( this, SqlAstNodeRenderingMode.NO_PLAIN_PARAMETER );
 		functionContributions.getFunctionRegistry().registerAlternateKey( "dateadd", "timestampadd" );
 		functionContributions.getFunctionRegistry().registerAlternateKey( "datediff", "timestampdiff" );
 
@@ -1484,11 +1509,29 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 *
 	 * @param specification {@code leading} or {@code trailing}
 	 * @param character the character to trim
+	 *
+	 * @deprecated Use {@link #trimPattern(TrimSpec, boolean)} instead.
 	 */
+	@Deprecated( forRemoval = true )
 	public String trimPattern(TrimSpec specification, char character) {
-		return character == ' '
-				? "trim(" + specification + " from ?1)"
-				: "trim(" + specification + " '" + character + "' from ?1)";
+		return trimPattern( specification, character == ' ' );
+	}
+
+	/**
+	 * Obtain a pattern for the SQL equivalent to a
+	 * {@code trim()} function call. The resulting
+	 * pattern must contain a ?1 placeholder for the
+	 * argument of type {@link String} and a ?2 placeholder
+	 * for the trim character if {@code isWhitespace}
+	 * was false.
+	 *
+	 * @param specification {@linkplain TrimSpec#LEADING leading}, {@linkplain TrimSpec#TRAILING trailing}
+	 * or {@linkplain TrimSpec#BOTH both}
+	 * @param isWhitespace {@code true} if the trim character is a whitespace and can be omitted,
+	 * {@code false} if it must be explicit and a ?2 placeholder should be included in the pattern
+	 */
+	public String trimPattern(TrimSpec specification, boolean isWhitespace) {
+		return "trim(" + specification + ( isWhitespace ? "" : " ?2" ) + " from ?1)";
 	}
 
 	/**
@@ -1544,6 +1587,10 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 * {@link Types#VARBINARY BINARY} and
 	 * {@link Types#LONGVARBINARY LONGVARBINARY} as the same type, since
 	 * Hibernate doesn't really differentiate these types.
+	 * <p>
+	 * On the other hand, integral types are not treated as equivalent,
+	 * instead, {@link #isCompatibleIntegralType(int, int)} is responsible
+	 * for determining if the types are compatible.
 	 *
 	 * @param typeCode1 the first column type info
 	 * @param typeCode2 the second column type info
@@ -1553,11 +1600,37 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	public boolean equivalentTypes(int typeCode1, int typeCode2) {
 		return typeCode1==typeCode2
 			|| isNumericOrDecimal(typeCode1) && isNumericOrDecimal(typeCode2)
-//			|| isIntegral(typeCode1) && isIntegral(typeCode2)
 			|| isFloatOrRealOrDouble(typeCode1) && isFloatOrRealOrDouble(typeCode2)
 			|| isVarcharType(typeCode1) && isVarcharType(typeCode2)
 			|| isVarbinaryType(typeCode1) && isVarbinaryType(typeCode2)
+			|| isCompatibleIntegralType(typeCode1, typeCode2)
+			// HHH-17908: Since the runtime can cope with enum on the DDL side,
+			// but varchar on the ORM expectation side, let's treat the types as equivalent
+			|| isEnumType(typeCode1) && isVarcharType(typeCode2)
 			|| sameColumnType(typeCode1, typeCode2);
+	}
+
+	/**
+	 * Tolerate storing {@code short} in {@code INTEGER} or {@code BIGINT}
+	 * or {@code int} in {@code BIGINT} for the purposes of schema validation
+	 * and migration.
+	 */
+	private boolean isCompatibleIntegralType(int typeCode1, int typeCode2) {
+		switch (typeCode1) {
+			case TINYINT:
+				return typeCode2 == TINYINT
+					|| typeCode2 == SMALLINT
+					|| typeCode2 == INTEGER
+					|| typeCode2 == BIGINT;
+			case SMALLINT:
+				return typeCode2 == SMALLINT
+					|| typeCode2 == INTEGER
+					|| typeCode2 == BIGINT;
+			case INTEGER:
+				return typeCode2 == INTEGER
+					|| typeCode2 == BIGINT;
+		}
+		return false;
 	}
 
 	private boolean sameColumnType(int typeCode1, int typeCode2) {
@@ -1574,8 +1647,8 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 * <p>
 	 * An implementation may set configuration properties from
 	 * {@link #initDefaultProperties()}, though it is discouraged.
-	 *
-	 * @return a set of Hibernate configuration properties
+	 the
+	 * @return the Hibernate configuration properties
 	 *
 	 * @see #initDefaultProperties()
 	 */
@@ -1638,13 +1711,6 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 			jdbcTypeRegistry.addDescriptor( NClobJdbcType.DEFAULT );
 		}
 
-		if ( useInputStreamToInsertBlob() ) {
-			jdbcTypeRegistry.addDescriptor(
-					Types.CLOB,
-					ClobJdbcType.STREAM_BINDING
-			);
-		}
-
 		if ( getTimeZoneSupport() == TimeZoneSupport.NATIVE ) {
 			jdbcTypeRegistry.addDescriptor( TimestampUtcAsOffsetDateTimeJdbcType.INSTANCE );
 			jdbcTypeRegistry.addDescriptor( TimeUtcAsOffsetTimeJdbcType.INSTANCE );
@@ -1699,8 +1765,11 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 					final OutputStream connectedStream = target.setBinaryStream( 1L );
 					// the BLOB from the detached state
 					final InputStream detachedStream = original.getBinaryStream();
-					StreamCopier.copy( detachedStream, connectedStream );
+					detachedStream.transferTo( connectedStream );
 					return target;
+				}
+				catch (IOException e ) {
+					throw new HibernateException( "Unable to copy stream content", e );
 				}
 				catch (SQLException e ) {
 					throw session.getFactory().getJdbcServices().getSqlExceptionHelper()
@@ -1720,8 +1789,11 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 					final OutputStream connectedStream = target.setAsciiStream( 1L );
 					// the CLOB from the detached state
 					final InputStream detachedStream = original.getAsciiStream();
-					StreamCopier.copy( detachedStream, connectedStream );
+					detachedStream.transferTo( connectedStream );
 					return target;
+				}
+				catch (IOException e ) {
+					throw new HibernateException( "Unable to copy stream content", e );
 				}
 				catch (SQLException e ) {
 					throw session.getFactory().getJdbcServices().getSqlExceptionHelper().convert( e, "unable to merge CLOB data" );
@@ -1740,8 +1812,11 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 					final OutputStream connectedStream = target.setAsciiStream( 1L );
 					// the NCLOB from the detached state
 					final InputStream detachedStream = original.getAsciiStream();
-					StreamCopier.copy( detachedStream, connectedStream );
+					detachedStream.transferTo( connectedStream );
 					return target;
+				}
+				catch (IOException e ) {
+					throw new HibernateException( "Unable to copy stream content", e );
 				}
 				catch (SQLException e ) {
 					throw session.getFactory().getJdbcServices().getSqlExceptionHelper().convert( e, "unable to merge NCLOB data" );
@@ -1764,9 +1839,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 			}
 			final JdbcServices jdbcServices = session.getFactory().getFastSessionServices().jdbcServices;
 			try {
-				final LobCreator lobCreator = jdbcServices.getLobCreator(
-						session
-				);
+				final LobCreator lobCreator = jdbcServices.getLobCreator( session );
 				return original == null
 						? lobCreator.createBlob( ArrayHelper.EMPTY_BYTE_ARRAY )
 						: lobCreator.createBlob( original.getBinaryStream(), original.length() );
@@ -1968,16 +2041,21 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 		switch ( lockMode ) {
 			case PESSIMISTIC_FORCE_INCREMENT:
 				return new PessimisticForceIncrementLockingStrategy( lockable, lockMode );
+			case UPGRADE_NOWAIT:
+			case UPGRADE_SKIPLOCKED:
 			case PESSIMISTIC_WRITE:
 				return new PessimisticWriteSelectLockingStrategy( lockable, lockMode );
 			case PESSIMISTIC_READ:
 				return new PessimisticReadSelectLockingStrategy( lockable, lockMode );
-			case OPTIMISTIC:
-				return new OptimisticLockingStrategy( lockable, lockMode );
 			case OPTIMISTIC_FORCE_INCREMENT:
 				return new OptimisticForceIncrementLockingStrategy( lockable, lockMode );
-			default:
+			case OPTIMISTIC:
+				return new OptimisticLockingStrategy( lockable, lockMode );
+			case READ:
 				return new SelectLockingStrategy( lockable, lockMode );
+			default:
+				// WRITE, NONE are not allowed here
+				throw new IllegalArgumentException( "Unsupported lock mode" );
 		}
 	}
 
@@ -2298,13 +2376,27 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	}
 
 	/**
+	 * A command to execute before dropping tables.
+	 *
+	 * @return A SQL statement, or {@code null}
+	 */
+	public String getBeforeDropStatement() {
+		return null;
+	}
+
+	/**
 	 * The command used to drop a table with the given name, usually
 	 * {@code drop table tab_name}.
 	 *
 	 * @param tableName The name of the table to drop
 	 *
 	 * @return The {@code drop table} statement as a string
+	 * 
+	 * @deprecated No longer used
+	 *
+	 * @see StandardTableExporter#getSqlDropStrings
 	 */
+	@Deprecated(since = "6.6")
 	public String getDropTableString(String tableName) {
 		final StringBuilder buf = new StringBuilder( "drop table " );
 		if ( supportsIfExistsBeforeTableName() ) {
@@ -2553,6 +2645,23 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 			String foreignKeyDefinition) {
 		return " add constraint " + quote( constraintName )
 				+ " " + foreignKeyDefinition;
+	}
+
+	/**
+	 * Does the dialect also need cross-references to get a complete
+	 * list of foreign keys?
+	 */
+	public boolean useCrossReferenceForeignKeys(){
+		return false;
+	}
+
+	/**
+	 * Some dialects require a not null primaryTable filter.
+	 * Sometimes a wildcard entry is sufficient for the like condition.
+	 * @return
+	 */
+	public String getCrossReferenceParentTableFilter(){
+		return null;
 	}
 
 	/**
@@ -3081,7 +3190,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 */
 	public IdentifierHelper buildIdentifierHelper(
 			IdentifierHelperBuilder builder,
-			DatabaseMetaData dbMetaData) throws SQLException {
+			@Nullable DatabaseMetaData dbMetaData) throws SQLException {
 		builder.applyIdentifierCasing( dbMetaData );
 		builder.applyReservedWords( sqlKeywords );
 		builder.setNameQualifierSupport( getNameQualifierSupport() );
@@ -3566,6 +3675,20 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	}
 
 	/**
+	 * Should BLOB, CLOB, and NCLOB be created solely using respectively
+	 * {@link Connection#createBlob()}, {@link Connection#createClob()},
+	 * and {@link Connection#createNClob()}.
+	 *
+	 * @return True if BLOB, CLOB, and NCLOB should be created using JDBC
+	 * {@link Connection}.
+	 *
+	 * @since 6.6
+	 */
+	public boolean useConnectionToCreateLob() {
+		return !useInputStreamToInsertBlob();
+	}
+
+	/**
 	 * Does this dialect support parameters within the {@code SELECT} clause
 	 * of {@code INSERT ... SELECT ...} statements?
 	 *
@@ -4042,13 +4165,39 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 *         {@code false} if {@code InsertReturningDelegate} does not work, or only
 	 *         works for specialized identity/"autoincrement" columns
 	 *
-	 * @see org.hibernate.generator.OnExecutionGenerator#getGeneratedIdentifierDelegate
 	 * @see org.hibernate.id.insert.InsertReturningDelegate
 	 *
 	 * @since 6.2
 	 */
 	public boolean supportsInsertReturning() {
 		return false;
+	}
+
+	/**
+	 * Does this dialect supports returning the {@link org.hibernate.annotations.RowId} column
+	 * after execution of an {@code insert} statement, using native SQL syntax?
+	 *
+	 * @return {@code true} is the dialect supports returning the rowid column
+	 *
+	 * @see #supportsInsertReturning()
+	 * @since 6.5
+	 */
+	public boolean supportsInsertReturningRowId() {
+		return supportsInsertReturning();
+	}
+
+	/**
+	 * Does this dialect fully support returning arbitrary generated column values
+	 * after execution of an {@code update} statement, using native SQL syntax?
+	 * <p>
+	 * Defaults to the value of {@link #supportsInsertReturning()} but can be overridden
+	 * to explicitly disable this for updates.
+	 *
+	 * @see #supportsInsertReturning()
+	 * @since 6.5
+	 */
+	public boolean supportsUpdateReturning() {
+		return supportsInsertReturning();
 	}
 
 	/**
@@ -4072,6 +4221,17 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	public boolean supportsInsertReturningGeneratedKeys() {
 		return false;
 	}
+
+	/**
+	 * Does this dialect require unquoting identifiers when passing them to the
+	 * {@link Connection#prepareStatement(String, String[])} JDBC method.
+	 *
+	 * @see Dialect#supportsInsertReturningGeneratedKeys()
+	 */
+	public boolean unquoteGetGeneratedKeys() {
+		return false;
+	}
+
 	/**
 	 * Does this dialect support the given {@code FETCH} clause type.
 	 *
@@ -4197,7 +4357,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 *                      an exception. Just rethrow and Hibernate will
 	 *                      handle it.
 	 */
-	public boolean supportsNamedParameters(DatabaseMetaData databaseMetaData) throws SQLException {
+	public boolean supportsNamedParameters(@Nullable DatabaseMetaData databaseMetaData) throws SQLException {
 		return databaseMetaData != null && databaseMetaData.supportsNamedParameters();
 	}
 
@@ -4210,6 +4370,18 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 */
 	public NationalizationSupport getNationalizationSupport() {
 		return NationalizationSupport.EXPLICIT;
+	}
+
+	/**
+	 * Checks whether the JDBC driver implements methods for handling nationalized character data types
+	 * {@link ResultSet#getNString(int)} / {@link java.sql.PreparedStatement#setNString(int, String)},
+	 * {@link ResultSet#getNClob(int)} /{@link java.sql.PreparedStatement#setNClob(int, NClob)},
+	 * {@link ResultSet#getNCharacterStream(int)} / {@link java.sql.PreparedStatement#setNCharacterStream(int, Reader, long)}
+	 *
+	 * @return {@code true} if the driver implements these methods
+	 */
+	public boolean supportsNationalizedMethods(){
+		return true;
 	}
 
 	/**
@@ -4360,6 +4532,17 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	}
 
 	/**
+	 * Does this dialect support the {@code conflict} clause for insert statements
+	 * that appear in a CTE?
+	 *
+	 * @return {@code true} if {@code conflict} clause is supported
+	 * @since 6.5
+	 */
+	public boolean supportsConflictClauseForInsertCTE() {
+		return false;
+	}
+
+	/**
 	 * Does this dialect support {@code values} lists of form
 	 * {@code VALUES (1), (2), (3)}?
 	 *
@@ -4378,6 +4561,16 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 */
 	public boolean supportsValuesListForInsert() {
 		return true;
+	}
+
+	/**
+	 * Does this dialect support the {@code from} clause for update statements?
+	 *
+	 * @return {@code true} if {@code from} clause is supported
+	 * @since 6.5
+	 */
+	public boolean supportsFromClauseInUpdate() {
+		return false;
 	}
 
 	/**
@@ -4503,7 +4696,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 		// Keep this here, rather than moving to Select.
 		// Some Dialects may need the hint to be appended to the very end or beginning
 		// of the finalized SQL statement, so wait until everything is processed.
-		if ( queryOptions.getDatabaseHints() != null && queryOptions.getDatabaseHints().size() > 0 ) {
+		if ( queryOptions.getDatabaseHints() != null && !queryOptions.getDatabaseHints().isEmpty() ) {
 			sql = getQueryHintString( sql, queryOptions.getDatabaseHints() );
 		}
 		if ( commentsEnabled && queryOptions.getComment() != null ) {
@@ -4595,7 +4788,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 */
 	public int getMaxVarcharLength() {
 		//the longest possible length of a Java string
-		return Integer.MAX_VALUE;
+		return Length.LONG32;
 	}
 
 	/**
@@ -4656,27 +4849,36 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	}
 
 	/**
-	 * The default length for a LOB column, if LOB columns have a length in
-	 * this dialect.
+	 * This is the default length for a generated column of type
+	 * {@link SqlTypes#BLOB BLOB} or {@link SqlTypes#CLOB CLOB}
+	 * mapped to {@link Blob} or {@link Clob}, if LOB columns
+	 * have a length in this dialect.
 	 *
 	 * @return {@value Size#DEFAULT_LOB_LENGTH} by default
 	 *
 	 * @see Length#LOB_DEFAULT
+	 * @see org.hibernate.type.descriptor.java.BlobJavaType
+	 * @see org.hibernate.type.descriptor.java.ClobJavaType
 	 */
 	public long getDefaultLobLength() {
 		return Size.DEFAULT_LOB_LENGTH;
 	}
 
 	/**
-	 * This is the default precision for a generated
-	 * column mapped to a {@link java.math.BigInteger}
-	 * or {@link java.math.BigDecimal}.
+	 * This is the default precision for a generated column of
+	 * exact numeric type {@link SqlTypes#DECIMAL DECIMAL} or
+	 * {@link SqlTypes#NUMERIC NUMERIC} mapped to a
+	 * {@link java.math.BigInteger} or
+	 * {@link java.math.BigDecimal}.
 	 * <p>
 	 * Usually returns the maximum precision of the
 	 * database, except when there is no such maximum
 	 * precision, or the maximum precision is very high.
 	 *
 	 * @return the default precision, in decimal digits
+	 *
+	 * @see org.hibernate.type.descriptor.java.BigDecimalJavaType
+	 * @see org.hibernate.type.descriptor.java.BigIntegerJavaType
 	 */
 	public int getDefaultDecimalPrecision() {
 		//this is the maximum for Oracle, SQL Server,
@@ -4686,21 +4888,54 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	}
 
 	/**
-	 * This is the default precision for a generated
-	 * column mapped to a {@link Timestamp} or
-	 * {@link java.time.LocalDateTime}.
+	 * This is the default precision for a generated column of
+	 * type {@link SqlTypes#TIMESTAMP TIMESTAMP} mapped to a
+	 * {@link Timestamp} or {@link java.time.LocalDateTime}.
 	 * <p>
 	 * Usually 6 (microseconds) or 3 (milliseconds).
 	 *
 	 * @return the default precision, in decimal digits,
 	 *         of the fractional seconds field
+	 *
+	 * @see org.hibernate.type.descriptor.java.JdbcTimestampJavaType
+	 * @see org.hibernate.type.descriptor.java.LocalDateTimeJavaType
+	 * @see org.hibernate.type.descriptor.java.OffsetDateTimeJavaType
+	 * @see org.hibernate.type.descriptor.java.ZonedDateTimeJavaType
+	 * @see org.hibernate.type.descriptor.java.InstantJavaType
 	 */
 	public int getDefaultTimestampPrecision() {
 		//milliseconds or microseconds is the maximum
 		//for most dialects that support explicit
-		//precision, with the exception of DB2 which
+		//precision, with the exception of Oracle,
+		//which accepts up to 9 digits, and DB2 which
 		//accepts up to 12 digits!
 		return 6; //microseconds!
+	}
+
+	/**
+	 * This is the default scale for a generated column of type
+	 * {@link SqlTypes#INTERVAL_SECOND INTERVAL SECOND} mapped
+	 * to a {@link Duration}.
+	 * <p>
+	 * Usually 9 (nanoseconds) or 6 (microseconds).
+	 *
+	 * @return the default scale, in decimal digits,
+	 *         of the fractional seconds field
+	 *
+	 * @see org.hibernate.type.descriptor.java.DurationJavaType
+	 */
+	public int getDefaultIntervalSecondScale(){
+		// The default scale necessary is 9 i.e. nanosecond resolution
+		return 9;
+	}
+
+	/**
+	 * Does this dialect round a temporal when converting from a precision higher to a lower one?
+	 *
+	 * @return true if rounding is applied, false if truncation is applied
+	 */
+	public boolean doesRoundTemporalOnOverflow() {
+		return true;
 	}
 
 	/**
@@ -4953,6 +5188,31 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	}
 
 	/**
+	 * Whether this Dialect supports {@linkplain PreparedStatement#addBatch() batch updates}.
+	 *
+	 * @return {@code true} indicates it does; {@code false} indicates it does not; {@code null} indicates
+	 * it might and that database-metadata should be consulted.
+	 *
+	 * @see org.hibernate.engine.jdbc.env.spi.ExtractedDatabaseMetaData#supportsBatchUpdates
+	 */
+	public Boolean supportsBatchUpdates() {
+		// are there any databases/drivers which don't?
+		return true;
+	}
+
+	/**
+	 * Whether this Dialect supports the JDBC {@link java.sql.Types#REF_CURSOR} type.
+	 *
+	 * @return {@code true} indicates it does; {@code false} indicates it does not; {@code null} indicates
+	 * it might and that database-metadata should be consulted
+	 *
+	 * @see org.hibernate.engine.jdbc.env.spi.ExtractedDatabaseMetaData#supportsRefCursors
+	 */
+	public Boolean supportsRefCursors() {
+		return null;
+	}
+
+	/**
 	 * Pluggable strategy for determining the {@link Size} to use for
 	 * columns of a given SQL type.
 	 * <p>
@@ -5018,7 +5278,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 					length = null;
 					size.setPrecision( javaType.getDefaultSqlPrecision( Dialect.this, jdbcType ) );
 					if ( scale != null && scale != 0 ) {
-						throw new IllegalArgumentException("scale has no meaning for floating point numbers");
+						throw new IllegalArgumentException("scale has no meaning for SQL floating point types");
 					}
 					// but if the user explicitly specifies a precision, we need to convert it:
 					if ( precision != null ) {
@@ -5036,7 +5296,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 					length = null;
 					size.setPrecision( javaType.getDefaultSqlPrecision( Dialect.this, jdbcType ) );
 					if ( scale != null && scale != 0 ) {
-						throw new IllegalArgumentException("scale has no meaning for timestamps");
+						throw new IllegalArgumentException("scale has no meaning for SQL time or timestamp types");
 					}
 					break;
 				case SqlTypes.NUMERIC:
@@ -5366,4 +5626,5 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	public FunctionalDependencyAnalysisSupport getFunctionalDependencyAnalysisSupport() {
 		return FunctionalDependencyAnalysisSupportImpl.NONE;
 	}
+
 }

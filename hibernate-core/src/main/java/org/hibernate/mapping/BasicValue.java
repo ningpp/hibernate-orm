@@ -63,7 +63,6 @@ import org.hibernate.type.descriptor.java.BasicJavaType;
 import org.hibernate.type.descriptor.java.BasicPluralJavaType;
 import org.hibernate.type.descriptor.java.JavaType;
 import org.hibernate.type.descriptor.java.MutabilityPlan;
-import org.hibernate.type.descriptor.java.spi.FormatMapperBasedJavaType;
 import org.hibernate.type.descriptor.java.spi.JavaTypeRegistry;
 import org.hibernate.type.descriptor.java.spi.JsonJavaType;
 import org.hibernate.type.descriptor.java.spi.RegistryHelper;
@@ -233,9 +232,10 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 
 	@Override
 	public long getColumnLength() {
-		final Selectable column = getColumn();
-		if ( column instanceof Column ) {
-			final Long length = ( (Column) column ).getLength();
+		final Selectable selectable = getColumn();
+		if ( selectable instanceof Column ) {
+			final Column column = (Column) selectable;
+			final Long length = column.getLength();
 			return length == null ? NO_COLUMN_LENGTH : length;
 		}
 		else {
@@ -245,10 +245,14 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 
 	@Override
 	public int getColumnPrecision() {
-		final Selectable column = getColumn();
-		if ( column instanceof Column ) {
-			final Integer length = ( (Column) column ).getPrecision();
-			return length == null ? NO_COLUMN_PRECISION : length;
+		final Selectable selectable = getColumn();
+		if ( selectable instanceof Column ) {
+			final Column column = (Column) selectable;
+			if ( column.getTemporalPrecision() != null ) {
+				return column.getTemporalPrecision();
+			}
+			final Integer precision = column.getPrecision();
+			return precision == null ? NO_COLUMN_PRECISION : precision;
 		}
 		else {
 			return NO_COLUMN_PRECISION;
@@ -257,10 +261,11 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 
 	@Override
 	public int getColumnScale() {
-		final Selectable column = getColumn();
-		if ( column instanceof Column ) {
-			final Integer length = ( (Column) column ).getScale();
-			return length == null ? NO_COLUMN_SCALE : length;
+		final Selectable selectable = getColumn();
+		if ( selectable instanceof Column ) {
+			final Column column = (Column) selectable;
+			final Integer scale = column.getScale();
+			return scale == null ? NO_COLUMN_SCALE : scale;
 		}
 		else {
 			return NO_COLUMN_SCALE;
@@ -364,7 +369,7 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 						resolution.getRelationalJavaType(),
 						size,
 						getBuildingContext().getMetadataCollector().getDatabase(),
-						getTypeConfiguration()
+						this
 				);
 
 		return resolution;
@@ -656,7 +661,7 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 
 	@Override
 	public ManagedBeanRegistry getManagedBeanRegistry() {
-		return getServiceRegistry().getService( ManagedBeanRegistry.class );
+		return getServiceRegistry().requireService( ManagedBeanRegistry.class );
 	}
 
 	private Resolution<?> converterResolution(JavaType<?> javaType, ConverterDescriptor attributeConverterDescriptor) {
@@ -665,6 +670,7 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 				explicitJavaTypeAccess,
 				explicitJdbcTypeAccess,
 				explicitMutabilityPlanAccess,
+				resolvedJavaType,
 				this,
 				this,
 				getBuildingContext()
@@ -798,7 +804,7 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 			MetadataBuildingContext context) {
 
 		final StandardServiceRegistry serviceRegistry = context.getBootstrapContext().getServiceRegistry();
-		final ManagedBeanRegistry managedBeanRegistry = serviceRegistry.getService( ManagedBeanRegistry.class );
+		final ManagedBeanRegistry managedBeanRegistry = serviceRegistry.requireService( ManagedBeanRegistry.class );
 		final TypeConfiguration typeConfiguration = context.getBootstrapContext().getTypeConfiguration();
 
 		final JpaAttributeConverterCreationContext converterCreationContext = new JpaAttributeConverterCreationContext() {
@@ -961,7 +967,7 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 		return aggregateColumn == null
 				? jdbcTypeCode
 				: getDialect().getAggregateSupport()
-				.aggregateComponentSqlTypeCode( aggregateColumn.getSqlTypeCode(), jdbcTypeCode );
+				.aggregateComponentSqlTypeCode( aggregateColumn.getSqlTypeCode( getMetadata() ), jdbcTypeCode );
 	}
 
 	@Override
@@ -1101,6 +1107,16 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 	}
 
 	@Override
+	public boolean isPreferJavaTimeJdbcTypesEnabled() {
+		return getBuildingContext().isPreferJavaTimeJdbcTypesEnabled();
+	}
+
+	@Override
+	public boolean isPreferNativeEnumTypesEnabled() {
+		return getBuildingContext().isPreferNativeEnumTypesEnabled();
+	}
+
+	@Override
 	public Object accept(ValueVisitor visitor) {
 		return visitor.accept(this);
 	}
@@ -1176,5 +1192,9 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 		 * The resolved MutabilityPlan
 		 */
 		MutabilityPlan<J> getMutabilityPlan();
+
+		default void updateResolution(BasicType<?> type) {
+			throw new UnsupportedOperationException();
+		}
 	}
 }

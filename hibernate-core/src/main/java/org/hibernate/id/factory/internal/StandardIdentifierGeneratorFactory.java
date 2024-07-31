@@ -95,7 +95,9 @@ public class StandardIdentifierGeneratorFactory
 			return null;
 		}
 		else {
-			final BeanContainer beanContainer = serviceRegistry.getService( ManagedBeanRegistry.class ).getBeanContainer();
+			final BeanContainer beanContainer =
+					serviceRegistry.requireService( ManagedBeanRegistry.class )
+							.getBeanContainer();
 			if ( beanContainer == null ) {
 				ID_GEN_FAC_LOGGER.debug( "Resolving IdentifierGenerator instances will not use CDI as it was not configured" );
 			}
@@ -112,7 +114,7 @@ public class StandardIdentifierGeneratorFactory
 	}
 
 	private void logOverrides() {
-		serviceRegistry.getService( ClassLoaderService.class )
+		serviceRegistry.requireService( ClassLoaderService.class )
 				.loadJavaServices( GenerationTypeStrategyRegistration.class )
 				.forEach( (registration) -> registration.registerStrategies(
 						(generationType, generationTypeStrategy) -> {
@@ -148,7 +150,7 @@ public class StandardIdentifierGeneratorFactory
 	}
 
 	private void registerUsingLegacyContributor() {
-		final ConfigurationService configService = serviceRegistry.getService( ConfigurationService.class );
+		final ConfigurationService configService = serviceRegistry.requireService( ConfigurationService.class );
 		final Object providerSetting = configService.getSettings().get( IDENTIFIER_GENERATOR_STRATEGY_PROVIDER );
 		if ( providerSetting != null ) {
 			DEPRECATION_LOGGER.deprecatedSetting2(
@@ -156,7 +158,7 @@ public class StandardIdentifierGeneratorFactory
 					"supply a org.hibernate.id.factory.spi.GenerationTypeStrategyRegistration Java service"
 			);
 			final IdentifierGeneratorStrategyProvider idGeneratorStrategyProvider =
-					serviceRegistry.getService( StrategySelector.class )
+					serviceRegistry.requireService( StrategySelector.class )
 							.resolveStrategy( IdentifierGeneratorStrategyProvider.class, providerSetting );
 			for ( Map.Entry<String,Class<?>> entry : idGeneratorStrategyProvider.getStrategies().entrySet() ) {
 				@SuppressWarnings({"rawtypes", "unchecked"})
@@ -196,15 +198,14 @@ public class StandardIdentifierGeneratorFactory
 		throw new UnsupportedOperationException( "No GenerationTypeStrategy specified" );
 	}
 
-	@Override @Deprecated
-	public Dialect getDialect() {
+	private Dialect getDialect() {
 		if ( dialect == null ) {
-			dialect = serviceRegistry.getService( JdbcEnvironment.class ).getDialect();
+			dialect = serviceRegistry.requireService( JdbcEnvironment.class ).getDialect();
 		}
 		return dialect;
 	}
 
-	@Override
+	@Override @Deprecated
 	public Generator createIdentifierGenerator(String strategy, Type type, Properties parameters) {
 		try {
 			final Class<? extends Generator> clazz = getIdentifierGeneratorClass( strategy );
@@ -241,8 +242,7 @@ public class StandardIdentifierGeneratorFactory
 		return true;
 	}
 
-	@Override
-	public Class<? extends Generator> getIdentifierGeneratorClass(String strategy) {
+	private Class<? extends Generator> getIdentifierGeneratorClass(String strategy) {
 		switch ( strategy ) {
 			case "hilo":
 				throw new UnsupportedOperationException( "Support for 'hilo' generator has been removed" );
@@ -255,10 +255,10 @@ public class StandardIdentifierGeneratorFactory
 		}
 	}
 
-	protected Class<? extends Generator> generatorClassForName(String strategy) {
+	private Class<? extends Generator> generatorClassForName(String strategy) {
 		try {
 			Class<? extends Generator> clazz =
-					serviceRegistry.getService( ClassLoaderService.class )
+					serviceRegistry.requireService( ClassLoaderService.class )
 							.classForName( strategy );
 			if ( !Generator.class.isAssignableFrom( clazz ) ) {
 				// in principle, this shouldn't happen, since @GenericGenerator

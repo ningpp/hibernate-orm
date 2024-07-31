@@ -42,6 +42,7 @@ public class EntityBatchLoaderArrayParam<T>
 		implements SqlArrayMultiKeyLoader {
 	private final int domainBatchSize;
 
+	private final LoadQueryInfluencers loadQueryInfluencers;
 	private final BasicEntityIdentifierMapping identifierMapping;
 	private final JdbcMapping arrayJdbcMapping;
 	private final JdbcParameter jdbcParameter;
@@ -63,8 +64,9 @@ public class EntityBatchLoaderArrayParam<T>
 	public EntityBatchLoaderArrayParam(
 			int domainBatchSize,
 			EntityMappingType entityDescriptor,
-			SessionFactoryImplementor sessionFactory) {
-		super( entityDescriptor, sessionFactory );
+			LoadQueryInfluencers loadQueryInfluencers) {
+		super( entityDescriptor, loadQueryInfluencers );
+		this.loadQueryInfluencers = loadQueryInfluencers;
 		this.domainBatchSize = domainBatchSize;
 
 		if ( MULTI_KEY_LOAD_LOGGER.isDebugEnabled() ) {
@@ -89,7 +91,7 @@ public class EntityBatchLoaderArrayParam<T>
 		sqlAst = LoaderSelectBuilder.createSelectBySingleArrayParameter(
 				getLoadable(),
 				identifierMapping,
-				new LoadQueryInfluencers( sessionFactory ),
+				loadQueryInfluencers,
 				LockOptions.NONE,
 				jdbcParameter,
 				sessionFactory
@@ -134,6 +136,13 @@ public class EntityBatchLoaderArrayParam<T>
 					getLoadable().getEntityName(), id, Arrays.toString(idsToInitialize) );
 		}
 
+		for ( Object initializedId : idsToInitialize ) {
+			if ( initializedId != null ) {
+				// found or not, remove the key from the batch-fetch queue
+				removeBatchLoadableEntityKey( initializedId, getLoadable(), session );
+			}
+		}
+
 		LoaderHelper.loadByArrayParameter(
 				idsToInitialize,
 				sqlAst,
@@ -147,13 +156,6 @@ public class EntityBatchLoaderArrayParam<T>
 				readOnly,
 				session
 		);
-
-		for ( Object initializedId : idsToInitialize ) {
-			if ( initializedId != null ) {
-				// found or not, remove the key from the batch-fetch queue
-				removeBatchLoadableEntityKey( initializedId, getLoadable(), session );
-			}
-		}
 	}
 
 	@Override

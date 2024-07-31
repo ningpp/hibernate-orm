@@ -33,6 +33,7 @@ apply plugin: 'org.hibernate.orm.build.java-module'
 
 apply plugin: 'org.checkerframework'
 
+apply plugin: "jacoco"
 apply plugin: 'checkstyle'
 apply plugin: 'build-dashboard'
 apply plugin: 'project-report'
@@ -89,14 +90,13 @@ dependencies {
 
 	testImplementation testLibs.byteman
 
-	testImplementation testLibs.jfrUnit
-
 	testRuntimeOnly testLibs.log4j2
 	testRuntimeOnly libs.byteBuddy
 
 	//Databases
 	testRuntimeOnly dbLibs.h2
 	testRuntimeOnly dbLibs.derby
+	testRuntimeOnly dbLibs.derbyTools
 	testRuntimeOnly dbLibs.hsqldb
 	testRuntimeOnly dbLibs.postgresql
 	testRuntimeOnly dbLibs.mssql
@@ -130,6 +130,9 @@ dependencies {
 	}
 	else if ( db.startsWith( 'altibase' ) ) {
 		testRuntimeOnly dbLibs.altibase
+	}
+	else if ( db.startsWith( 'informix' ) ) {
+		testRuntimeOnly dbLibs.informix
 	}
 
 	annotationProcessor libs.loggingProcessor
@@ -247,13 +250,6 @@ tasks.withType( Test.class ).each { test ->
 sourceSets {
 	test {
 		resources {
-			// add `src/test/java` as a test-resources dir
-			configure( srcDir('src/test/java') ) {
-				filter {
-					include '**/*.properties'
-					include '**/*.xml'
-				}
-			}
 			configure( srcDir('src/test/resources') ) {
 				filter {
 					include '*.properties'
@@ -271,6 +267,7 @@ processTestResources {
 	duplicatesStrategy DuplicatesStrategy.INCLUDE
 	inputs.property( "db", db )
 	inputs.property( "dbHost", dbHost )
+	inputs.file( rootProject.file( "gradle/databases.gradle" ) )
 	doLast {
 		copy {
 			from( sourceSets.test.java.srcDirs ) {
@@ -300,21 +297,6 @@ test {
 	systemProperty 'file.encoding', 'UTF-8'
 	// Needed for AdoptOpenJDK on alpine? The problem is similar to this: https://github.com/mockito/mockito/issues/978
 	jvmArgs '-XX:+StartAttachListener'
-}
-
-// Enable the experimental features of ByteBuddy with JDK 22+
-test {
-	// We need to test the *launcher* version,
-	// because some tests will use Mockito (and thus Bytebuddy) to mock/spy
-	// classes that are part of the JDK,
-	// and those classes always have bytecode matching the version of the launcher.
-	// So for example, when using a JDK22 launcher and compiling tests with --release 21,
-	// Bytebuddy will still encounter classes with Java 22 bytecode.
-	if ( jdkVersions.test.launcher.asInt() >= 22 ) {
-		logger.warn( "The version of Java bytecode that will be tested is not supported by Bytebuddy by default. " +
-				 " Setting 'net.bytebuddy.experimental=true'." )
-		systemProperty 'net.bytebuddy.experimental', true
-	}
 }
 
 test {
@@ -460,7 +442,7 @@ checkstyle {
 // exclude generated java sources - by explicitly setting the base source dir
 tasks.checkstyleMain.source = 'src/main/java'
 tasks.checkstyleMain
-		.exclude('org/hibernate/jpamodelgen/util/NullnessUtil.java')
+		.exclude('org/hibernate/processor/util/NullnessUtil.java')
 		.exclude('org/hibernate/internal/util/NullnessUtil.java')
 
 // define a second checkstyle task for checking non-fatal violations
@@ -488,16 +470,21 @@ tasks.withType(JavaCompile).configureEach { task ->
     // working directory and prevents from using a relative path to locate a project file.
     // Using a CommandLineArgumentProvider allows build cache hits when the build cache is relocated.
     task.options.compilerArgumentProviders.add(new CompilerStubsArgumentProvider(stubsDir: new File(project.rootDir, "checkerstubs")))
+
+	if (System.getProperty('APT_DEBUG', 'false') == 'true') {
+		task.options.forkOptions.jvmArgs += ['-Xdebug', '-Xrunjdwp:transport=dt_socket,server=y,suspend=y,address=9099']
+	}
 }
 
 checkerFramework {
+	excludeTests = true
 	checkers = [
 			'org.checkerframework.checker.nullness.NullnessChecker'
 	]
 	extraJavacArgs = [
             '-AsuppressWarnings=initialization',
             // stubs is passed directly through options.compilerArgumentProviders
-            '-AonlyDefs=^org\\.hibernate\\.(jdbc|exception|integrator|jpamodelgen|service|spi|pretty|property\\.access|stat|engine\\.(config|jndi|profile|spi|transaction)|(action|context|bytecode)\\.spi)\\.'
+            '-AonlyDefs=^org\\.hibernate\\.(jdbc|exception|integrator|processor|service|spi|pretty|property\\.access|stat|engine\\.(config|jndi|profile|spi|transaction)|(action|context|bytecode)\\.spi)\\.'
 	]
 }
 

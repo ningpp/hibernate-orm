@@ -11,6 +11,7 @@ import java.util.function.Consumer;
 
 import jakarta.persistence.CacheRetrieveMode;
 import jakarta.persistence.CacheStoreMode;
+import jakarta.persistence.LockModeType;
 import jakarta.persistence.PessimisticLockScope;
 import org.hibernate.graph.RootGraph;
 import org.hibernate.jdbc.Work;
@@ -44,7 +45,16 @@ import jakarta.persistence.criteria.CriteriaUpdate;
  * <p>
  * At any given time, an instance may be associated with at most one open session.
  * <p>
- * Any instance returned by {@link #get(Class, Object)} or by a query is persistent.
+ * Any instance returned by {@link #get(Class, Object)}, {@link #find(Class, Object)},
+ * or by a query is persistent. A persistent instance might hold references to other
+ * entity instances, and sometimes these references are <em>proxied</em> by an
+ * intermediate object. When an associated entity has not yet been fetched from the
+ * database, references to the unfetched entity are represented by uninitialized
+ * proxies. The state of an unfetched entity is automatically fetched from the
+ * database when a method of its proxy is invoked, if and only if the proxy is
+ * associated with an open session. Otherwise, {@link #getReference(Object)} may be
+ * used to trade a proxy belonging to a closed session for a new proxy associated
+ * with the current session.
  * <p>
  * A transient instance may be made persistent by calling {@link #persist(Object)}.
  * A persistent instance may be made detached by calling {@link #detach(Object)}.
@@ -66,12 +76,29 @@ import jakarta.persistence.criteria.CriteriaUpdate;
  * detached instance to the persistent state are now deprecated, and clients should now
  * migrate to the use of {@code merge()}.
  * <p>
+ * The persistent state of a managed entity may be refreshed from the database, discarding
+ * all modifications to the object held in memory, by calling {@link #refresh(Object)}.
+ * <p>
  * From {@linkplain FlushMode time to time}, a {@linkplain #flush() flush operation} is
  * triggered, and the session synchronizes state held in memory with persistent state
  * held in the database by executing SQL {@code insert}, {@code update}, and {@code delete}
  * statements. Note that SQL statements are often not executed synchronously by the methods
  * of the {@code Session} interface. If synchronous execution of SQL is desired, the
  * {@link StatelessSession} allows this.
+ * <p>
+ * Each managed instance has an associated {@link LockMode}. By default, the session
+ * obtains only {@link LockMode#READ} on an entity instance it reads from the database
+ * and {@link LockMode#WRITE} on an entity instance it writes to the database. This
+ * behavior is appropriate for programs which use optimistic locking.
+ * <ul>
+ * <li>A different lock level may be obtained by explicitly specifying the mode using
+ *     {@link #get(Class, Object, LockMode)}, {@link #find(Class, Object, LockModeType)},
+ *     {@link #refresh(Object, LockMode)}, {@link #refresh(Object, LockModeType)}, or
+ *     {@link org.hibernate.query.SelectionQuery#setLockMode(LockModeType)}.
+ * <li>The lock level of a managed instance already held by the session may be upgraded
+ *     to a more restrictive lock level by calling {@link #lock(Object, LockMode)} or
+ *     {@link #lock(Object, LockModeType)}.
+ * </ul>
  * <p>
  * A persistence context holds hard references to all its entities and prevents them
  * from being garbage collected. Therefore, a {@code Session} is a short-lived object,
@@ -781,28 +808,42 @@ public interface Session extends SharedSessionContract, EntityManager {
 
 	/**
 	 * Obtain the specified lock level on the given managed instance associated
-	 * with this session. This may be used to:
+	 * with this session. This operation may be used to:
 	 * <ul>
-	 * <li>perform a version check with {@link LockMode#READ}, or
-	 * <li>upgrade to a pessimistic lock with {@link LockMode#PESSIMISTIC_WRITE}).
+	 * <li>perform a version check on an entity read from the second-level cache
+	 *     by requesting {@link LockMode#READ},
+	 * <li>schedule a version check at transaction commit by requesting
+	 *     {@link LockMode#OPTIMISTIC},
+	 * <li>schedule a version increment at transaction commit by requesting
+	 *     {@link LockMode#OPTIMISTIC_FORCE_INCREMENT}
+	 * <li>upgrade to a pessimistic lock with {@link LockMode#PESSIMISTIC_READ}
+	 *     or {@link LockMode#PESSIMISTIC_WRITE}, or
+	 * <li>immediately increment the version of the given instance by requesting
+	 *     {@link LockMode#PESSIMISTIC_FORCE_INCREMENT}.
 	 * </ul>
+	 * <p>
+	 * If the requested lock mode is already held on the given entity, this
+	 * operation has no effect.
 	 * <p>
 	 * This operation cascades to associated instances if the association is
 	 * mapped with {@link org.hibernate.annotations.CascadeType#LOCK}.
+	 * <p>
+	 * The modes {@link LockMode#WRITE} and {@link LockMode#UPGRADE_SKIPLOCKED}
+	 * are not legal arguments to {@code lock()}.
 	 *
-	 * @param object a persistent or transient instance
+	 * @param object a persistent instance
 	 * @param lockMode the lock level
 	 */
 	void lock(Object object, LockMode lockMode);
 
 	/**
 	 * Obtain a lock on the given managed instance associated with this session,
-	 * using the given {@link LockOptions lock options}.
+	 * using the given {@linkplain LockOptions lock options}.
 	 * <p>
 	 * This operation cascades to associated instances if the association is
 	 * mapped with {@link org.hibernate.annotations.CascadeType#LOCK}.
 	 *
-	 * @param object a persistent or transient instance
+	 * @param object a persistent instance
 	 * @param lockOptions the lock options
 	 *
 	 * @since 6.2
@@ -821,7 +862,7 @@ public interface Session extends SharedSessionContract, EntityManager {
 	 * mapped with {@link org.hibernate.annotations.CascadeType#LOCK}.
 	 *
 	 * @param entityName the name of the entity
-	 * @param object a persistent or transient instance
+	 * @param object a persistent instance associated with this session
 	 * @param lockMode the lock level
 	 *
 	 * @deprecated use {@link #lock(Object, LockMode)}
@@ -830,7 +871,7 @@ public interface Session extends SharedSessionContract, EntityManager {
 	void lock(String entityName, Object object, LockMode lockMode);
 
 	/**
-	 * Build a new {@link LockRequest lock request} that specifies:
+	 * Build a new {@linkplain LockRequest lock request} that specifies:
 	 * <ul>
 	 * <li>the {@link LockMode} to use,
 	 * <li>the {@linkplain LockRequest#setTimeOut(int) pessimistic lock timeout},
@@ -872,7 +913,7 @@ public interface Session extends SharedSessionContract, EntityManager {
 	 * This operation requests {@link LockMode#READ}. To obtain a stronger lock,
 	 * call {@link #refresh(Object, LockMode)}.
 	 *
-	 * @param object a persistent or detached instance
+	 * @param object a persistent instance associated with this session
 	 */
 	void refresh(Object object);
 
@@ -892,7 +933,7 @@ public interface Session extends SharedSessionContract, EntityManager {
 	 * with {@link jakarta.persistence.CascadeType#REFRESH}.
 	 *
 	 * @param entityName the name of the entity
-	 * @param object a persistent or detached instance
+	 * @param object a persistent instance associated with this session
 	 *
 	 * @deprecated use {@link #refresh(Object)}
 	 */
@@ -905,7 +946,7 @@ public interface Session extends SharedSessionContract, EntityManager {
 	 * <p>
 	 * Convenient form of {@link #refresh(Object, LockOptions)}
 	 *
-	 * @param object a persistent or detached instance
+	 * @param object a persistent instance associated with this session
 	 * @param lockMode the lock mode to use
 	 *
 	 * @see #refresh(Object, LockOptions)
@@ -916,7 +957,7 @@ public interface Session extends SharedSessionContract, EntityManager {
 	 * Reread the state of the given managed instance from the underlying database,
 	 * obtaining the given {@link LockMode}.
 	 *
-	 * @param object a persistent or detached instance
+	 * @param object a persistent instance associated with this session
 	 * @param lockOptions contains the lock mode to use
 	 */
 	void refresh(Object object, LockOptions lockOptions);
@@ -926,7 +967,7 @@ public interface Session extends SharedSessionContract, EntityManager {
 	 * obtaining the given {@link LockMode}.
 	 *
 	 * @param entityName the name of the entity
-	 * @param object a persistent or detached instance
+	 * @param object a persistent instance associated with this session
 	 * @param lockOptions contains the lock mode to use
 	 *
 	 * @deprecated use {@link #refresh(Object, LockOptions)}
@@ -948,7 +989,7 @@ public interface Session extends SharedSessionContract, EntityManager {
 	 * Determine the current {@link LockMode} of the given managed instance associated
 	 * with this session.
 	 *
-	 * @param object a persistent instance
+	 * @param object a persistent instance associated with this session
 	 *
 	 * @return the current lock mode
 	 */
@@ -968,6 +1009,9 @@ public interface Session extends SharedSessionContract, EntityManager {
 	 * instance.
 	 * <p>
 	 * This operation is very similar to {@link #find(Class, Object)}.
+	 * <p>
+	 * The object returned by {@code get()} or {@code find() } is either an unproxied instance
+	 * of the given entity class, of a fully-fetched proxy object.
 	 * <p>
 	 * This operation requests {@link LockMode#NONE}, that is, no lock, allowing the object
 	 * to be retrieved from the cache without the cost of database access. However, if it is
@@ -1086,6 +1130,15 @@ public interface Session extends SharedSessionContract, EntityManager {
 	 * <p>
 	 * Note that {@link Hibernate#createDetachedProxy(SessionFactory, Class, Object)}
 	 * may be used to obtain a <em>detached</em> reference.
+	 * <p>
+	 * It's sometimes necessary to narrow a reference returned by {@code getReference()}
+	 * to a subtype of the given entity type. A direct Java typecast should never be used
+	 * in this situation. Instead, the method {@link Hibernate#unproxy(Object, Class)} is
+	 * the recommended way to narrow the type of a proxy object. Alternatively, a new
+	 * reference may be obtained by simply calling {@code getReference()} again, passing
+	 * the subtype. Either way, the narrowed reference will usually not be identical to
+	 * the original reference, when the references are compared using the {@code ==}
+	 * operator.
 	 *
 	 * @param entityType the entity type
 	 * @param id the identifier of a persistent instance that exists in the database
@@ -1260,37 +1313,13 @@ public interface Session extends SharedSessionContract, EntityManager {
 	 */
 	<T> NaturalIdMultiLoadAccess<T> byMultipleNaturalId(String entityName);
 
-	/**
-	 * Enable the named {@linkplain Filter filter} for this current session.
-	 * <p>
-	 * The returned {@link Filter} object must be used to bind arguments
-	 * to parameters of the filter, and every parameter must be set before
-	 * any other operation of this session is called.
-	 *
-	 * @param filterName the name of the filter to be enabled.
-	 *
-	 * @return the {@link Filter} instance representing the enabled filter.
-	 *
-	 * @throws UnknownFilterException if there is no such filter
-	 *
-	 * @see org.hibernate.annotations.FilterDef
-	 */
+	@Override
 	Filter enableFilter(String filterName);
 
-	/**
-	 * Retrieve a currently enabled {@linkplain Filter filter} by name.
-	 *
-	 * @param filterName the name of the filter to be retrieved.
-	 *
-	 * @return the {@link Filter} instance representing the enabled filter.
-	 */
+	@Override
 	Filter getEnabledFilter(String filterName);
 
-	/**
-	 * Disable the named {@linkplain Filter filter} for the current session.
-	 *
-	 * @param filterName the name of the filter to be disabled.
-	 */
+	@Override
 	void disableFilter(String filterName);
 	
 	/**

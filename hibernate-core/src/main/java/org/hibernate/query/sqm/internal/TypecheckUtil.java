@@ -11,9 +11,10 @@ import jakarta.persistence.metamodel.EntityType;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.metamodel.mapping.JdbcMapping;
 import org.hibernate.metamodel.model.domain.DomainType;
+import org.hibernate.metamodel.model.domain.EmbeddableDomainType;
+import org.hibernate.metamodel.model.domain.ManagedDomainType;
 import org.hibernate.metamodel.model.domain.TupleType;
-import org.hibernate.metamodel.model.domain.internal.DiscriminatorSqmPathSource;
-import org.hibernate.metamodel.model.domain.internal.EmbeddedSqmPathSource;
+import org.hibernate.metamodel.model.domain.internal.EntityDiscriminatorSqmPathSource;
 import org.hibernate.persister.entity.EntityPersister;
 import org.hibernate.query.SemanticException;
 import org.hibernate.query.sqm.BinaryArithmeticOperator;
@@ -27,6 +28,7 @@ import org.hibernate.query.sqm.tree.expression.SqmExpression;
 import org.hibernate.query.sqm.tree.expression.SqmLiteralNull;
 import org.hibernate.type.BasicPluralType;
 import org.hibernate.type.BasicType;
+import org.hibernate.type.QueryParameterJavaObjectType;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
 
 import java.time.temporal.Temporal;
@@ -103,8 +105,13 @@ public class TypecheckUtil {
 			SqmExpressible<?> lhsType,
 			SqmExpressible<?> rhsType,
 			SessionFactoryImplementor factory) {
-
 		if ( lhsType == null || rhsType == null || lhsType == rhsType ) {
+			return true;
+		}
+
+		// for query with parameters we are unable to resolve the correct JavaType, especially for tuple of parameters
+
+		if ( lhsType instanceof QueryParameterJavaObjectType || rhsType instanceof QueryParameterJavaObjectType) {
 			return true;
 		}
 
@@ -117,43 +124,45 @@ public class TypecheckUtil {
 			return true;
 		}
 
+		final DomainType<?> lhsDomainType = lhsType.getSqmType();
+		final DomainType<?> rhsDomainType = rhsType.getSqmType();
+
 		// for embeddables, the embeddable class must match exactly
 
-		if ( lhsType instanceof EmbeddedSqmPathSource && rhsType instanceof EmbeddedSqmPathSource ) {
-			return areEmbeddableTypesComparable(
-					(EmbeddedSqmPathSource<?>) lhsType,
-					(EmbeddedSqmPathSource<?>) rhsType
-			);
+		final EmbeddableDomainType<?> lhsEmbeddable = getEmbeddableType( lhsDomainType );
+		final EmbeddableDomainType<?> rhsEmbeddable = getEmbeddableType( rhsDomainType );
+		if ( lhsEmbeddable != null && rhsEmbeddable != null ) {
+			return areEmbeddableTypesComparable( lhsEmbeddable, rhsEmbeddable );
 		}
 
 		// for tuple constructors, we must check each element
 
-		if ( lhsType instanceof TupleType && rhsType instanceof TupleType ) {
-			return areTupleTypesComparable( factory, (TupleType<?>) lhsType, (TupleType<?>) rhsType );
+		if ( lhsDomainType instanceof TupleType && rhsDomainType instanceof TupleType ) {
+			return areTupleTypesComparable( factory, (TupleType<?>) lhsDomainType, (TupleType<?>) rhsDomainType );
 		}
 
 		// allow comparing an embeddable against a tuple literal
 
-		if ( lhsType instanceof EmbeddedSqmPathSource<?> && rhsType instanceof TupleType
-				|| rhsType instanceof EmbeddedSqmPathSource<?> && lhsType instanceof TupleType ) {
+		if ( lhsEmbeddable != null && rhsDomainType instanceof TupleType
+				|| rhsEmbeddable != null && lhsDomainType instanceof TupleType ) {
 			// TODO: do something meaningful here
 			return true;
 		}
 
 		// entities can be compared if they belong to the same inheritance hierarchy
 
-		if ( lhsType instanceof EntityType && rhsType instanceof EntityType ) {
-			return areEntityTypesComparable( (EntityType<?>) lhsType, (EntityType<?>) rhsType, factory );
+		if ( lhsDomainType instanceof EntityType && rhsDomainType instanceof EntityType ) {
+			return areEntityTypesComparable( (EntityType<?>) lhsDomainType, (EntityType<?>) rhsDomainType, factory );
 		}
 
 		// entities can be compared to discriminators if they belong to
 		// the same inheritance hierarchy
 
-		if ( lhsType instanceof DiscriminatorSqmPathSource) {
-			return isDiscriminatorTypeComparable( (DiscriminatorSqmPathSource<?>) lhsType, rhsType, factory );
+		if ( lhsDomainType instanceof EntityDiscriminatorSqmPathSource ) {
+			return isDiscriminatorTypeComparable( (EntityDiscriminatorSqmPathSource<?>) lhsDomainType, rhsDomainType, factory );
 		}
-		if ( rhsType instanceof DiscriminatorSqmPathSource ) {
-			return isDiscriminatorTypeComparable( (DiscriminatorSqmPathSource<?>) rhsType, lhsType, factory );
+		if ( rhsDomainType instanceof EntityDiscriminatorSqmPathSource ) {
+			return isDiscriminatorTypeComparable( (EntityDiscriminatorSqmPathSource<?>) rhsDomainType, lhsDomainType, factory );
 		}
 
 		// Treat the expressions as comparable if they belong to the same
@@ -162,8 +171,6 @@ public class TypecheckUtil {
 		// decent approach which allows comparison between literals and
 		// enums, user-defined types, etc.
 
-		DomainType<?> lhsDomainType = lhsType.getSqmType();
-		DomainType<?> rhsDomainType = rhsType.getSqmType();
 		if ( lhsDomainType instanceof JdbcMapping && rhsDomainType instanceof JdbcMapping ) {
 			JdbcType lhsJdbcType = ((JdbcMapping) lhsDomainType).getJdbcType();
 			JdbcType rhsJdbcType = ((JdbcMapping) rhsDomainType).getJdbcType();
@@ -191,11 +198,26 @@ public class TypecheckUtil {
 		return false;
 	}
 
+	private static EmbeddableDomainType<?> getEmbeddableType(SqmExpressible<?> expressible) {
+		return expressible instanceof EmbeddableDomainType<?> ? (EmbeddableDomainType<?>) expressible : null;
+	}
+
 	private static boolean areEmbeddableTypesComparable(
-			EmbeddedSqmPathSource<?> lhsType,
-			EmbeddedSqmPathSource<?> rhsType) {
-		// no polymorphism for embeddable types
-		return rhsType.getNodeJavaType() == lhsType.getNodeJavaType();
+			EmbeddableDomainType<?> lhsType,
+			EmbeddableDomainType<?> rhsType) {
+		if ( rhsType.getJavaType() == lhsType.getJavaType() ) {
+			return true;
+		}
+
+		return lhsType.isPolymorphic() && getRootEmbeddableType( lhsType ) == getRootEmbeddableType( rhsType );
+	}
+
+	private static ManagedDomainType<?> getRootEmbeddableType(EmbeddableDomainType<?> embeddableType) {
+		ManagedDomainType<?> rootType = embeddableType;
+		while ( rootType.getSuperType() != null ) {
+			rootType = rootType.getSuperType();
+		}
+		return rootType;
 	}
 
 	private static boolean areTupleTypesComparable(
@@ -224,7 +246,7 @@ public class TypecheckUtil {
 	}
 
 	private static boolean isDiscriminatorTypeComparable(
-			DiscriminatorSqmPathSource<?> lhsDiscriminator, SqmExpressible<?> rhsType,
+			EntityDiscriminatorSqmPathSource<?> lhsDiscriminator, SqmExpressible<?> rhsType,
 			SessionFactoryImplementor factory) {
 		String entityName = lhsDiscriminator.getEntityDomainType().getHibernateEntityName();
 		EntityPersister lhsEntity = factory.getMappingMetamodel().getEntityDescriptor( entityName );
@@ -233,8 +255,8 @@ public class TypecheckUtil {
 			EntityPersister rhsEntity = getEntityDescriptor( factory, rhsEntityName );
 			return lhsEntity.getRootEntityName().equals( rhsEntity.getRootEntityName() );
 		}
-		else if ( rhsType instanceof DiscriminatorSqmPathSource ) {
-			DiscriminatorSqmPathSource<?> discriminator = (DiscriminatorSqmPathSource<?>) rhsType;
+		else if ( rhsType instanceof EntityDiscriminatorSqmPathSource ) {
+			EntityDiscriminatorSqmPathSource<?> discriminator = (EntityDiscriminatorSqmPathSource<?>) rhsType;
 			String rhsEntityName = discriminator.getEntityDomainType().getHibernateEntityName();
 			EntityPersister rhsEntity = factory.getMappingMetamodel().getEntityDescriptor( rhsEntityName );
 			return rhsEntity.getRootEntityName().equals( lhsEntity.getRootEntityName() );
@@ -326,10 +348,12 @@ public class TypecheckUtil {
 	 * @see TypecheckUtil#assertAssignable(String, SqmPath, SqmTypedNode, SessionFactoryImplementor)
 	 */
 	public static void assertComparable(Expression<?> x, Expression<?> y, SessionFactoryImplementor factory) {
-		SqmExpression<?> left = (SqmExpression<?>) x;
-		SqmExpression<?> right = (SqmExpression<?>) y;
-		if (  left.getTupleLength() != null && right.getTupleLength() != null
-				&& left.getTupleLength().intValue() != right.getTupleLength().intValue() ) {
+		final SqmExpression<?> left = (SqmExpression<?>) x;
+		final SqmExpression<?> right = (SqmExpression<?>) y;
+		final Integer leftTupleLength = left.getTupleLength();
+		final Integer rightTupleLength;
+		if (  leftTupleLength != null && ( rightTupleLength = right.getTupleLength() ) != null
+				&& leftTupleLength.intValue() != rightTupleLength.intValue() ) {
 			throw new SemanticException( "Cannot compare tuples of different lengths" );
 		}
 
@@ -340,9 +364,9 @@ public class TypecheckUtil {
 		}
 
 		// allow comparing literal null to things
-		if ( !(left instanceof SqmLiteralNull) && !(right instanceof SqmLiteralNull) ) {
-			final SqmExpressible<?> leftType = left.getNodeType();
-			final SqmExpressible<?> rightType = right.getNodeType();
+		if ( !( left instanceof SqmLiteralNull ) && !( right instanceof SqmLiteralNull ) ) {
+			final SqmExpressible<?> leftType = left.getExpressible();
+			final SqmExpressible<?> rightType = right.getExpressible();
 			if ( !areTypesComparable( leftType, rightType, factory ) ) {
 				throw new SemanticException(
 						String.format(
@@ -388,8 +412,8 @@ public class TypecheckUtil {
 		final SqmExpressible<?> leftNodeType = left.getNodeType();
 		final SqmExpressible<?> rightNodeType = right.getNodeType();
 		if ( leftNodeType != null && rightNodeType != null ) {
-			final Class<?> leftJavaType = leftNodeType.getExpressibleJavaType().getJavaTypeClass();
-			final Class<?> rightJavaType = rightNodeType.getExpressibleJavaType().getJavaTypeClass();
+			final Class<?> leftJavaType = leftNodeType.getRelationalJavaType().getJavaTypeClass();
+			final Class<?> rightJavaType = rightNodeType.getRelationalJavaType().getJavaTypeClass();
 			if ( Number.class.isAssignableFrom( leftJavaType ) ) {
 				// left operand is a number
 				switch (op) {
@@ -484,7 +508,7 @@ public class TypecheckUtil {
 		}
 	}
 
-	private static boolean isNumberArray(SqmExpressible<?> expressible) {
+	public static boolean isNumberArray(SqmExpressible<?> expressible) {
 		final DomainType<?> domainType;
 		if ( expressible != null && ( domainType = expressible.getSqmType() ) != null ) {
 			return domainType instanceof BasicPluralType<?, ?> && Number.class.isAssignableFrom(
@@ -497,39 +521,24 @@ public class TypecheckUtil {
 	public static void assertString(SqmExpression<?> expression) {
 		final SqmExpressible<?> nodeType = expression.getNodeType();
 		if ( nodeType != null ) {
-			final Class<?> javaType = nodeType.getExpressibleJavaType().getJavaTypeClass();
-			if ( javaType != String.class && javaType != char[].class ) {
+			final DomainType<?> domainType = nodeType.getSqmType();
+			if ( !( domainType instanceof JdbcMapping ) || !( (JdbcMapping) domainType ).getJdbcType().isStringLike() ) {
 				throw new SemanticException(
 						"Operand of 'like' is of type '" + nodeType.getTypeName() +
-								"' which is not a string (it is not an instance of 'java.lang.String' or 'char[]')"
+								"' which is not a string (its JDBC type code is not string-like)"
 				);
 			}
 		}
 	}
 
-//	public static void assertNumeric(SqmExpression<?> expression, BinaryArithmeticOperator op) {
-//		final SqmExpressible<?> nodeType = expression.getNodeType();
-//		if ( nodeType != null ) {
-//			final Class<?> javaType = nodeType.getExpressibleJavaType().getJavaTypeClass();
-//			if ( !Number.class.isAssignableFrom( javaType )
-//					&& !Temporal.class.isAssignableFrom( javaType )
-//					&& !TemporalAmount.class.isAssignableFrom( javaType )
-//					&& !java.util.Date.class.isAssignableFrom( javaType ) ) {
-//				throw new SemanticException( "Operand of " + op.getOperatorSqlText()
-//						+ " is of type '" + nodeType.getTypeName() + "' which is not a numeric type"
-//						+ " (it is not an instance of 'java.lang.Number', 'java.time.Temporal', or 'java.time.TemporalAmount')" );
-//			}
-//		}
-//	}
-
 	public static void assertDuration(SqmExpression<?> expression) {
 		final SqmExpressible<?> nodeType = expression.getNodeType();
 		if ( nodeType != null ) {
-			final Class<?> javaType = nodeType.getExpressibleJavaType().getJavaTypeClass();
-			if ( !TemporalAmount.class.isAssignableFrom( javaType ) ) {
+			final DomainType<?> domainType = nodeType.getSqmType();
+			if ( !( domainType instanceof JdbcMapping ) || !( (JdbcMapping) domainType ).getJdbcType().isDuration() ) {
 				throw new SemanticException(
 						"Operand of 'by' is of type '" + nodeType.getTypeName() +
-								"' which is not a duration (it is not an instance of 'java.time.TemporalAmount')"
+								"' which is not a duration (its JDBC type code is not duration-like)"
 				);
 			}
 		}
@@ -538,11 +547,11 @@ public class TypecheckUtil {
 	public static void assertNumeric(SqmExpression<?> expression, UnaryArithmeticOperator op) {
 		final SqmExpressible<?> nodeType = expression.getNodeType();
 		if ( nodeType != null ) {
-			final Class<?> javaType = nodeType.getExpressibleJavaType().getJavaTypeClass();
-			if ( !Number.class.isAssignableFrom( javaType ) ) {
+			final DomainType<?> domainType = nodeType.getSqmType();
+			if ( !( domainType instanceof JdbcMapping ) || !( (JdbcMapping) domainType ).getJdbcType().isNumber() ) {
 				throw new SemanticException(
 						"Operand of " + op.getOperatorChar() + " is of type '" + nodeType.getTypeName() +
-								"' which is not a numeric type (it is not an instance of 'java.lang.Number')"
+								"' which is not a numeric type (its JDBC type code is not numeric)"
 				);
 			}
 		}

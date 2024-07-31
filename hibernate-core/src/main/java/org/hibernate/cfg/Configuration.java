@@ -37,9 +37,7 @@ import org.hibernate.boot.model.convert.internal.ClassBasedConverterDescriptor;
 import org.hibernate.boot.model.convert.internal.InstanceBasedConverterDescriptor;
 import org.hibernate.boot.model.convert.spi.ConverterDescriptor;
 import org.hibernate.boot.model.naming.ImplicitNamingStrategy;
-import org.hibernate.boot.model.naming.ImplicitNamingStrategyJpaCompliantImpl;
 import org.hibernate.boot.model.naming.PhysicalNamingStrategy;
-import org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl;
 import org.hibernate.boot.model.relational.AuxiliaryDatabaseObject;
 import org.hibernate.boot.model.relational.ColumnOrderingStrategy;
 import org.hibernate.boot.query.NamedHqlQueryDefinition;
@@ -95,7 +93,7 @@ import static java.util.Collections.emptyList;
  *     // set a configuration property
  *     .setProperty(AvailableSettings.DATASOURCE,
  *                  "java:comp/env/jdbc/test")
- *     .getSessionFactory();
+ *     .buildSessionFactory();
  * </pre>
  * <p>
  * In addition, there are convenience methods for adding
@@ -129,7 +127,8 @@ public class Configuration {
 
 	private final BootstrapServiceRegistry bootstrapServiceRegistry;
 	private final MetadataSources metadataSources;
-	private final ClassmateContext classmateContext;
+	final private StandardServiceRegistryBuilder standardServiceRegistryBuilder;
+	private final ClassmateContext classmateContext = new ClassmateContext();
 
 	// used during processing mappings
 	private ImplicitNamingStrategy implicitNamingStrategy;
@@ -138,11 +137,11 @@ public class Configuration {
 	private List<UserTypeRegistration> userTypeRegistrations;
 	private final List<TypeContributor> typeContributorRegistrations = new ArrayList<>();
 	private final List<FunctionContributor> functionContributorRegistrations = new ArrayList<>();
-	private Map<String, NamedHqlQueryDefinition> namedQueries;
-	private Map<String, NamedNativeQueryDefinition> namedSqlQueries;
-	private Map<String, NamedProcedureCallDefinition> namedProcedureCallMap;
-	private Map<String, NamedResultSetMappingDescriptor> sqlResultSetMappings;
-	private Map<String, NamedEntityGraphDefinition> namedEntityGraphMap;
+	private final Map<String, NamedHqlQueryDefinition> namedQueries = new HashMap<>();
+	private final Map<String, NamedNativeQueryDefinition> namedSqlQueries = new HashMap<>();
+	private final Map<String, NamedProcedureCallDefinition> namedProcedureCallMap = new HashMap<>();
+	private final Map<String, NamedResultSetMappingDescriptor> sqlResultSetMappings = new HashMap<>();
+	private final Map<String, NamedEntityGraphDefinition> namedEntityGraphMap = new HashMap<>();
 
 	private Map<String, SqmFunctionDescriptor> customFunctionDescriptors;
 	private List<AuxiliaryDatabaseObject> auxiliaryDatabaseObjectList;
@@ -150,15 +149,14 @@ public class Configuration {
 	private List<EntityNameResolver> entityNameResolvers = new ArrayList<>();
 
 	// used to build SF
-	private StandardServiceRegistryBuilder standardServiceRegistryBuilder;
+	private Properties properties = new Properties();
+	private Interceptor interceptor = EmptyInterceptor.INSTANCE;
 	private EntityNotFoundDelegate entityNotFoundDelegate;
-	private Interceptor interceptor;
 	private SessionFactoryObserver sessionFactoryObserver;
 	private StatementInspector statementInspector;
 	private CurrentTenantIdentifierResolver<Object> currentTenantIdentifierResolver;
 	private CustomEntityDirtinessStrategy customEntityDirtinessStrategy;
 	private ColumnOrderingStrategy columnOrderingStrategy;
-	private Properties properties;
 	private SharedCacheMode sharedCacheMode;
 
 	@Deprecated(since = "6", forRemoval = true)
@@ -179,10 +177,10 @@ public class Configuration {
 	 * and a newly instantiated {@link MetadataSources}.
 	 */
 	public Configuration(BootstrapServiceRegistry serviceRegistry) {
-		this.bootstrapServiceRegistry = serviceRegistry;
-		this.metadataSources = new MetadataSources( serviceRegistry, createMappingBinderAccess( serviceRegistry ) );
-		this.classmateContext = new ClassmateContext();
-		reset();
+		bootstrapServiceRegistry = serviceRegistry;
+		metadataSources = new MetadataSources( serviceRegistry, createMappingBinderAccess( serviceRegistry ) );
+		standardServiceRegistryBuilder = new StandardServiceRegistryBuilder( bootstrapServiceRegistry );
+		properties.putAll( standardServiceRegistryBuilder.getSettings() );
 	}
 
 	private XmlMappingBinderAccess createMappingBinderAccess(BootstrapServiceRegistry serviceRegistry) {
@@ -197,10 +195,10 @@ public class Configuration {
 	 * {@link BootstrapServiceRegistry} obtained from the {@link MetadataSources}.
 	 */
 	public Configuration(MetadataSources metadataSources) {
-		this.bootstrapServiceRegistry = getBootstrapRegistry( metadataSources.getServiceRegistry() );
 		this.metadataSources = metadataSources;
-		this.classmateContext = new ClassmateContext();
-		reset();
+		bootstrapServiceRegistry = getBootstrapRegistry( metadataSources.getServiceRegistry() );
+		standardServiceRegistryBuilder = new StandardServiceRegistryBuilder( bootstrapServiceRegistry );
+		properties.putAll( standardServiceRegistryBuilder.getSettings() );
 	}
 
 	private static BootstrapServiceRegistry getBootstrapRegistry(ServiceRegistry serviceRegistry) {
@@ -217,21 +215,6 @@ public class Configuration {
 						"and could not determine how to locate BootstrapServiceRegistry " +
 						"from Configuration instantiation"
 		);
-	}
-
-	protected void reset() {
-		implicitNamingStrategy = ImplicitNamingStrategyJpaCompliantImpl.INSTANCE;
-		physicalNamingStrategy = PhysicalNamingStrategyStandardImpl.INSTANCE;
-		namedQueries = new HashMap<>();
-		namedSqlQueries = new HashMap<>();
-		sqlResultSetMappings = new HashMap<>();
-		namedEntityGraphMap = new HashMap<>();
-		namedProcedureCallMap = new HashMap<>();
-
-		standardServiceRegistryBuilder = new StandardServiceRegistryBuilder( bootstrapServiceRegistry );
-		interceptor = EmptyInterceptor.INSTANCE;
-		properties = new Properties(  );
-		properties.putAll( standardServiceRegistryBuilder.getSettings() );
 	}
 
 
@@ -281,6 +264,62 @@ public class Configuration {
 	public Configuration setProperty(String propertyName, String value) {
 		properties.setProperty( propertyName, value );
 		return this;
+	}
+
+	/**
+	 * Set a property to a boolean value by name
+	 *
+	 * @param propertyName The name of the property to set
+	 * @param value The new boolean property value
+	 *
+	 * @return {@code this} for method chaining
+	 *
+	 * @since 6.5
+	 */
+	public Configuration setProperty(String propertyName, boolean value) {
+		return setProperty( propertyName, Boolean.toString(value) );
+	}
+
+	/**
+	 * Set a property to a Java class name
+	 *
+	 * @param propertyName The name of the property to set
+	 * @param value The Java class
+	 *
+	 * @return {@code this} for method chaining
+	 *
+	 * @since 6.5
+	 */
+	public Configuration setProperty(String propertyName, Class<?> value) {
+		return setProperty( propertyName, value.getName() );
+	}
+
+	/**
+	 * Set a property to the name of a value of an enumerated type
+	 *
+	 * @param propertyName The name of the property to set
+	 * @param value A value of an enumerated type
+	 *
+	 * @return {@code this} for method chaining
+	 *
+	 * @since 6.5
+	 */
+	public Configuration setProperty(String propertyName, Enum<?> value) {
+		return setProperty( propertyName, value.name() );
+	}
+
+	/**
+	 * Set a property to an integer value by name
+	 *
+	 * @param propertyName The name of the property to set
+	 * @param value The new integer property value
+	 *
+	 * @return {@code this} for method chaining
+	 *
+	 * @since 6.5
+	 */
+	public Configuration setProperty(String propertyName, int value) {
+		return setProperty( propertyName, Integer.toString(value) );
 	}
 
 	/**
@@ -965,14 +1004,29 @@ public class Configuration {
 		}
 	}
 
+	/**
+	 * @deprecated use {@link #addSqlFunction(String, SqmFunctionDescriptor)}
+	 */
+	@Deprecated(since = "6.5", forRemoval = true)
 	public Map<String,SqmFunctionDescriptor> getSqlFunctions() {
+		if ( customFunctionDescriptors == null ) {
+			customFunctionDescriptors = new HashMap<>();
+		}
 		return customFunctionDescriptors;
 	}
 
 	/**
-	 * Adds a {@linkplain SqmFunctionDescriptor SQL function descriptor} to this configuration.
+	 * Adds a {@linkplain SqmFunctionDescriptor function descriptor} to
+	 * this configuration.
+	 *
+	 * @apiNote For historical reasons, this method is misnamed.
+	 *          The function descriptor actually describes a function
+	 *          available in HQL, and it may or may not map directly
+	 *          to a function defined in SQL.
 	 *
 	 * @return {@code this} for method chaining
+	 *
+	 * @see SqmFunctionDescriptor
 	 */
 	public Configuration addSqlFunction(String functionName, SqmFunctionDescriptor function) {
 		if ( customFunctionDescriptors == null ) {

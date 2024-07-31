@@ -18,6 +18,7 @@ import org.hibernate.metamodel.mapping.CollectionIdentifierDescriptor;
 import org.hibernate.metamodel.mapping.EntityMappingType;
 import org.hibernate.metamodel.mapping.JdbcMapping;
 import org.hibernate.metamodel.mapping.MappingType;
+import org.hibernate.metamodel.mapping.PluralAttributeMapping;
 import org.hibernate.metamodel.mapping.SelectableConsumer;
 import org.hibernate.metamodel.model.domain.NavigableRole;
 import org.hibernate.persister.collection.CollectionPersister;
@@ -63,6 +64,11 @@ public class CollectionIdentifierDescriptorImpl implements CollectionIdentifierD
 	@Override
 	public Nature getNature() {
 		return Nature.ID;
+	}
+
+	@Override
+	public PluralAttributeMapping getCollectionAttribute() {
+		return collectionDescriptor.getAttributeMapping();
 	}
 
 	@Override
@@ -132,6 +138,11 @@ public class CollectionIdentifierDescriptorImpl implements CollectionIdentifierD
 
 	@Override
 	public Integer getScale() {
+		return null;
+	}
+
+	@Override
+	public Integer getTemporalPrecision() {
 		return null;
 	}
 
@@ -273,7 +284,8 @@ public class CollectionIdentifierDescriptorImpl implements CollectionIdentifierD
 				fetchablePath,
 				this,
 				FetchTiming.IMMEDIATE,
-				creationState
+				creationState,
+				!sqlSelection.isVirtual()
 		);
 	}
 
@@ -300,7 +312,9 @@ public class CollectionIdentifierDescriptorImpl implements CollectionIdentifierD
 				sqlSelection.getValuesArrayPosition(),
 				null,
 				type,
-				collectionPath
+				collectionPath,
+				false,
+				!sqlSelection.isVirtual()
 		);
 	}
 

@@ -10,8 +10,6 @@ import java.util.List;
 import java.util.function.Supplier;
 
 import org.hibernate.CacheMode;
-import org.hibernate.LockMode;
-import org.hibernate.LockOptions;
 import org.hibernate.cache.spi.access.CollectionDataAccess;
 import org.hibernate.cache.spi.entry.CollectionCacheEntry;
 import org.hibernate.collection.spi.PersistentCollection;
@@ -22,8 +20,8 @@ import org.hibernate.engine.spi.PersistenceContext;
 import org.hibernate.engine.spi.SessionEventListenerManager;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
-import org.hibernate.event.jfr.CachePutEvent;
-import org.hibernate.event.jfr.internal.JfrEventManager;
+import org.hibernate.event.spi.EventManager;
+import org.hibernate.event.spi.HibernateMonitoringEvent;
 import org.hibernate.internal.CoreLogging;
 import org.hibernate.internal.CoreMessageLogger;
 import org.hibernate.metamodel.mapping.ModelPart;
@@ -38,10 +36,16 @@ import org.hibernate.sql.exec.spi.ExecutionContext;
 import org.hibernate.sql.results.ResultsLogger;
 import org.hibernate.sql.results.graph.AssemblerCreationState;
 import org.hibernate.sql.results.graph.DomainResultAssembler;
+import org.hibernate.sql.results.graph.FetchParent;
 import org.hibernate.sql.results.graph.Initializer;
+import org.hibernate.sql.results.graph.InitializerParent;
+import org.hibernate.sql.results.graph.InitializerProducer;
+import org.hibernate.sql.results.graph.collection.internal.AbstractImmediateCollectionInitializer;
 import org.hibernate.sql.results.graph.instantiation.DynamicInstantiationResult;
+import org.hibernate.sql.results.jdbc.internal.StandardJdbcValuesMapping;
 import org.hibernate.sql.results.jdbc.spi.JdbcValues;
 import org.hibernate.sql.results.jdbc.spi.JdbcValuesMapping;
+import org.hibernate.sql.results.jdbc.spi.JdbcValuesMappingResolution;
 import org.hibernate.sql.results.spi.RowReader;
 import org.hibernate.sql.results.spi.RowTransformer;
 import org.hibernate.stat.spi.StatisticsImplementor;
@@ -54,96 +58,24 @@ public class ResultsHelper {
 	private static final CoreMessageLogger LOG = CoreLogging.messageLogger( ResultsHelper.class );
 
 	public static <R> RowReader<R> createRowReader(
-			ExecutionContext executionContext,
-			LockOptions lockOptions,
+			SessionFactoryImplementor sessionFactory,
 			RowTransformer<R> rowTransformer,
 			Class<R> transformedResultJavaType,
 			JdbcValues jdbcValues) {
-		return createRowReader( executionContext, lockOptions, rowTransformer, transformedResultJavaType, jdbcValues.getValuesMapping());
+		return createRowReader( sessionFactory, rowTransformer, transformedResultJavaType, jdbcValues.getValuesMapping() );
 	}
 
 	public static <R> RowReader<R> createRowReader(
-			ExecutionContext executionContext,
-			LockOptions lockOptions,
+			SessionFactoryImplementor sessionFactory,
 			RowTransformer<R> rowTransformer,
 			Class<R> transformedResultJavaType,
 			JdbcValuesMapping jdbcValuesMapping) {
-		final SessionFactoryImplementor sessionFactory = executionContext.getSession().getFactory();
-
-		//custom Map<NavigablePath, Initializer>
-		final NavigablePathMapToInitializer initializerMap = new NavigablePathMapToInitializer();
-		final InitializersList.Builder initializersBuilder = new InitializersList.Builder();
-
-		final List<DomainResultAssembler<?>> assemblers = jdbcValuesMapping.resolveAssemblers(
-				new AssemblerCreationState() {
-					Boolean dynamicInstantiation;
-
-					@Override
-					public boolean isScrollResult() {
-						return executionContext.isScrollResult();
-					}
-
-					@Override
-					public boolean isDynamicInstantiation() {
-						if ( dynamicInstantiation == null ) {
-							dynamicInstantiation = jdbcValuesMapping.getDomainResults()
-									.stream()
-									.anyMatch( domainResult -> domainResult instanceof DynamicInstantiationResult );
-						}
-						return dynamicInstantiation;
-					}
-
-					@Override
-					public LockMode determineEffectiveLockMode(String identificationVariable) {
-						return lockOptions.getEffectiveLockMode( identificationVariable );
-					}
-
-					@Override
-					public Initializer resolveInitializer(
-							NavigablePath navigablePath,
-							ModelPart fetchedModelPart,
-							Supplier<Initializer> producer) {
-						final Initializer existing = initializerMap.get( navigablePath );
-						if ( existing != null ) {
-							if ( fetchedModelPart.getNavigableRole().equals(
-									existing.getInitializedPart().getNavigableRole() ) ) {
-								ResultsLogger.RESULTS_MESSAGE_LOGGER.tracef(
-										"Returning previously-registered initializer : %s",
-										existing
-								);
-								return existing;
-							}
-						}
-
-						final Initializer initializer = producer.get();
-						ResultsLogger.RESULTS_MESSAGE_LOGGER.tracef(
-								"Registering initializer : %s",
-								initializer
-						);
-
-						initializerMap.put( navigablePath, initializer );
-						initializersBuilder.addInitializer( initializer );
-
-						return initializer;
-					}
-
-					@Override
-					public SqlAstCreationContext getSqlAstCreationContext() {
-						return sessionFactory;
-					}
-
-					@Override
-					public ExecutionContext getExecutionContext() {
-						return executionContext;
-					}
-				}
+		final JdbcValuesMappingResolution jdbcValuesMappingResolution = jdbcValuesMapping.resolveAssemblers( sessionFactory );
+		return new StandardRowReader<>(
+				jdbcValuesMappingResolution,
+				rowTransformer,
+				transformedResultJavaType
 		);
-
-		initializerMap.logInitializers();
-
-		final InitializersList initializersList = initializersBuilder.build( initializerMap );
-
-		return new StandardRowReader<>( assemblers, initializersList, rowTransformer, transformedResultJavaType );
 	}
 
 	public static void finalizeCollectionLoading(
@@ -152,16 +84,14 @@ public class ResultsHelper {
 			PersistentCollection<?> collectionInstance,
 			Object key,
 			boolean hasNoQueuedAdds) {
+		final SharedSessionContractImplementor session = persistenceContext.getSession();
+
 		CollectionEntry collectionEntry = persistenceContext.getCollectionEntry( collectionInstance );
 		if ( collectionEntry == null ) {
-			collectionEntry = persistenceContext.addInitializedCollection(
-					collectionDescriptor,
-					collectionInstance,
-					key
-			);
+			collectionEntry = persistenceContext.addInitializedCollection( collectionDescriptor, collectionInstance, key );
 		}
 		else {
-			collectionEntry.postInitialize( collectionInstance );
+			collectionEntry.postInitialize( collectionInstance, session );
 		}
 
 		if ( collectionDescriptor.getCollectionType().hasHolder() ) {
@@ -179,7 +109,6 @@ public class ResultsHelper {
 		final BatchFetchQueue batchFetchQueue = persistenceContext.getBatchFetchQueue();
 		batchFetchQueue.removeBatchLoadableCollection( collectionEntry );
 
-		final SharedSessionContractImplementor session = persistenceContext.getSession();
 		// add to cache if:
 		final boolean addToCache =
 				// there were no queued additions
@@ -288,7 +217,8 @@ public class ResultsHelper {
 		// CollectionRegionAccessStrategy has no update, so avoid putting uncommitted data via putFromLoad
 		if ( isPutFromLoad ) {
 			final SessionEventListenerManager eventListenerManager = session.getEventListenerManager();
-			final CachePutEvent cachePutEvent = JfrEventManager.beginCachePutEvent();
+			final EventManager eventManager = session.getEventManager();
+			final HibernateMonitoringEvent cachePutEvent = eventManager.beginCachePutEvent();
 			boolean put = false;
 			try {
 				eventListenerManager.cachePutStart();
@@ -302,13 +232,13 @@ public class ResultsHelper {
 				);
 			}
 			finally {
-				JfrEventManager.completeCachePutEvent(
+				eventManager.completeCachePutEvent(
 						cachePutEvent,
 						session,
 						cacheAccess,
 						collectionDescriptor,
 						put,
-						JfrEventManager.CacheActionDescription.COLLECTION_INSERT
+						EventManager.CacheActionDescription.COLLECTION_INSERT
 				);
 				eventListenerManager.cachePutEnd();
 

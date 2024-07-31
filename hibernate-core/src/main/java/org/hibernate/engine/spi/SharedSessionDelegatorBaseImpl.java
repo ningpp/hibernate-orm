@@ -14,6 +14,7 @@ import jakarta.persistence.criteria.CriteriaUpdate;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 import org.hibernate.CacheMode;
+import org.hibernate.Filter;
 import org.hibernate.FlushMode;
 import org.hibernate.HibernateException;
 import org.hibernate.Interceptor;
@@ -25,6 +26,7 @@ import org.hibernate.engine.jdbc.LobCreator;
 import org.hibernate.engine.jdbc.connections.spi.JdbcConnectionAccess;
 import org.hibernate.engine.jdbc.spi.JdbcCoordinator;
 import org.hibernate.engine.jdbc.spi.JdbcServices;
+import org.hibernate.event.spi.EventManager;
 import org.hibernate.graph.RootGraph;
 import org.hibernate.jdbc.ReturningWork;
 import org.hibernate.jdbc.Work;
@@ -33,6 +35,7 @@ import org.hibernate.procedure.ProcedureCall;
 import org.hibernate.query.MutationQuery;
 import org.hibernate.query.SelectionQuery;
 import org.hibernate.query.criteria.HibernateCriteriaBuilder;
+import org.hibernate.query.criteria.JpaCriteriaInsert;
 import org.hibernate.query.criteria.JpaCriteriaInsertSelect;
 import org.hibernate.query.spi.QueryImplementor;
 import org.hibernate.query.spi.QueryProducerImplementor;
@@ -96,6 +99,12 @@ public class SharedSessionDelegatorBaseImpl implements SharedSessionContractImpl
 
 	@Override
 	public MutationQuery createMutationQuery(@SuppressWarnings("rawtypes") JpaCriteriaInsertSelect insertSelect) {
+		//noinspection resource
+		return delegate().createMutationQuery( insertSelect );
+	}
+
+	@Override
+	public MutationQuery createMutationQuery(@SuppressWarnings("rawtypes") JpaCriteriaInsert insertSelect) {
 		//noinspection resource
 		return delegate().createMutationQuery( insertSelect );
 	}
@@ -312,6 +321,11 @@ public class SharedSessionDelegatorBaseImpl implements SharedSessionContractImpl
 	@Override
 	public Integer getJdbcBatchSize() {
 		return delegate.getJdbcBatchSize();
+	}
+
+	@Override
+	public EventManager getEventManager() {
+		return delegate.getEventManager();
 	}
 
 	@Override
@@ -545,6 +559,17 @@ public class SharedSessionDelegatorBaseImpl implements SharedSessionContractImpl
 	}
 
 	@Override
+	public boolean autoFlushIfRequired(Set<String> querySpaces, boolean skipPreFlush)
+			throws HibernateException {
+		return delegate.autoFlushIfRequired( querySpaces, skipPreFlush );
+	}
+
+	@Override
+	public void autoPreFlush() {
+		delegate.autoPreFlush();
+	}
+
+	@Override
 	public void afterOperation(boolean success) {
 		delegate.afterOperation( success );
 	}
@@ -637,5 +662,20 @@ public class SharedSessionDelegatorBaseImpl implements SharedSessionContractImpl
 	@Override
 	public <T> List<EntityGraph<? super T>> getEntityGraphs(Class<T> entityClass) {
 		return delegate.getEntityGraphs( entityClass );
+	}
+
+	@Override
+	public Filter enableFilter(String filterName) {
+		return delegate.enableFilter( filterName );
+	}
+
+	@Override
+	public Filter getEnabledFilter(String filterName) {
+		return delegate.getEnabledFilter( filterName );
+	}
+
+	@Override
+	public void disableFilter(String filterName) {
+		delegate.disableFilter( filterName );
 	}
 }

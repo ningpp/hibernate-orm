@@ -22,23 +22,29 @@ import org.hibernate.sql.results.graph.DomainResultAssembler;
 import org.hibernate.sql.results.graph.DomainResultCreationState;
 import org.hibernate.sql.results.graph.Fetch;
 import org.hibernate.sql.results.graph.FetchParent;
-import org.hibernate.sql.results.graph.FetchParentAccess;
 import org.hibernate.sql.results.graph.Fetchable;
 import org.hibernate.sql.results.graph.Initializer;
+import org.hibernate.sql.results.graph.InitializerParent;
+import org.hibernate.sql.results.graph.InitializerProducer;
+import org.hibernate.sql.results.graph.basic.BasicFetch;
 import org.hibernate.sql.results.graph.embeddable.EmbeddableInitializer;
 import org.hibernate.sql.results.graph.embeddable.EmbeddableResultGraphNode;
 import org.hibernate.sql.results.graph.embeddable.EmbeddableValuedFetchable;
 
+import static org.hibernate.internal.util.NullnessUtil.castNonNull;
+
 /**
  * @author Steve Ebersole
  */
-public class EmbeddableFetchImpl extends AbstractFetchParent implements EmbeddableResultGraphNode, Fetch {
+public class EmbeddableFetchImpl extends AbstractFetchParent
+		implements EmbeddableResultGraphNode, Fetch, InitializerProducer<EmbeddableFetchImpl> {
 
 	private final FetchParent fetchParent;
 	private final FetchTiming fetchTiming;
 	private final TableGroup tableGroup;
 	private final boolean hasTableGroup;
 	private final EmbeddableMappingType fetchContainer;
+	private final BasicFetch<?> discriminatorFetch;
 
 	public EmbeddableFetchImpl(
 			NavigablePath navigablePath,
@@ -75,6 +81,8 @@ public class EmbeddableFetchImpl extends AbstractFetchParent implements Embeddab
 				}
 		);
 
+		this.discriminatorFetch = creationState.visitEmbeddableDiscriminatorFetch( this, false );
+
 		afterInitialize( this, creationState );
 	}
 
@@ -82,12 +90,13 @@ public class EmbeddableFetchImpl extends AbstractFetchParent implements Embeddab
 	 * For Hibernate Reactive
 	 */
 	protected EmbeddableFetchImpl(EmbeddableFetchImpl original) {
-		super( original.getNavigablePath() );
-		this.fetchContainer = original.getFetchContainer();
+		super( original );
+		fetchContainer = original.getFetchContainer();
 		fetchParent = original.fetchParent;
 		fetchTiming = original.fetchTiming;
 		tableGroup = original.tableGroup;
 		hasTableGroup = original.hasTableGroup;
+		discriminatorFetch = original.discriminatorFetch;
 	}
 
 	@Override
@@ -128,7 +137,8 @@ public class EmbeddableFetchImpl extends AbstractFetchParent implements Embeddab
 				final NavigablePath navigablePath = tableGroupJoin.getNavigablePath();
 				if ( tableGroupJoin.getJoinedGroup().isFetched()
 						&& fetchable.getFetchableName().equals( navigablePath.getLocalName() )
-						&& tableGroupJoin.getJoinedGroup().getModelPart() == fetchable ) {
+						&& tableGroupJoin.getJoinedGroup().getModelPart() == fetchable
+						&& castNonNull( navigablePath.getParent() ).equals( getNavigablePath() ) ) {
 					return navigablePath;
 				}
 			}
@@ -142,25 +152,25 @@ public class EmbeddableFetchImpl extends AbstractFetchParent implements Embeddab
 	}
 
 	@Override
-	public DomainResultAssembler createAssembler(
-			FetchParentAccess parentAccess,
+	public DomainResultAssembler<?> createAssembler(
+			InitializerParent<?> parent,
 			AssemblerCreationState creationState) {
-		final EmbeddableInitializer initializer = creationState.resolveInitializer(
-				getNavigablePath(),
-				getReferencedModePart(),
-				() -> buildEmbeddableFetchInitializer( parentAccess, this, creationState )
-		).asEmbeddableInitializer();
-
-		assert initializer != null;
-
-		return new EmbeddableAssembler( initializer );
+		Initializer<?> initializer = creationState.resolveInitializer( this, parent, this );
+		EmbeddableInitializer<?> embeddableInitializer = initializer.asEmbeddableInitializer();
+		return new EmbeddableAssembler( embeddableInitializer );
 	}
 
-	protected Initializer buildEmbeddableFetchInitializer(
-			FetchParentAccess parentAccess,
-				EmbeddableResultGraphNode embeddableFetch,
+	@Override
+	public Initializer<?> createInitializer(
+			EmbeddableFetchImpl resultGraphNode,
+			InitializerParent<?> parent,
 			AssemblerCreationState creationState) {
-		return new EmbeddableFetchInitializer( parentAccess, this, creationState );
+		return resultGraphNode.createInitializer( parent, creationState );
+	}
+
+	@Override
+	public EmbeddableInitializer<?> createInitializer(InitializerParent<?> parent, AssemblerCreationState creationState) {
+		return new EmbeddableInitializerImpl( this, discriminatorFetch, parent, creationState, true );
 	}
 
 	@Override
@@ -171,5 +181,9 @@ public class EmbeddableFetchImpl extends AbstractFetchParent implements Embeddab
 	@Override
 	public FetchParent asFetchParent() {
 		return this;
+	}
+
+	protected BasicFetch<?> getDiscriminatorFetch() {
+		return discriminatorFetch;
 	}
 }

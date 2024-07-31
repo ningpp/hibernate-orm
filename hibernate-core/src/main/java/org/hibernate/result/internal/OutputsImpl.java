@@ -16,7 +16,10 @@ import java.util.List;
 import java.util.function.Supplier;
 
 import org.hibernate.JDBCException;
+import org.hibernate.engine.jdbc.spi.SqlStatementLogger;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
+import org.hibernate.event.spi.EventManager;
+import org.hibernate.event.spi.HibernateMonitoringEvent;
 import org.hibernate.internal.CoreLogging;
 import org.hibernate.procedure.internal.ProcedureCallImpl;
 import org.hibernate.procedure.internal.ScalarDomainResultBuilder;
@@ -51,13 +54,16 @@ public class OutputsImpl implements Outputs {
 
 	private final ResultContext context;
 	private final PreparedStatement jdbcStatement;
+	private final SqlStatementLogger sqlStatementLogger;
+	private final String sql;
 
 	private CurrentReturnState currentReturnState;
 
-	public OutputsImpl(ResultContext context, PreparedStatement jdbcStatement) {
+	public OutputsImpl(ResultContext context, PreparedStatement jdbcStatement, String sql) {
 		this.context = context;
 		this.jdbcStatement = jdbcStatement;
-
+		this.sqlStatementLogger = context.getSession().getJdbcServices().getSqlStatementLogger();
+		this.sql = sql;
 	}
 
 	protected ResultContext getResultContext(){
@@ -65,12 +71,22 @@ public class OutputsImpl implements Outputs {
 	}
 
 	protected void executeStatement() {
+		long executeStartNanos = 0;
+		if ( sqlStatementLogger.getLogSlowQuery() > 0 ) {
+			executeStartNanos = System.nanoTime();
+		}
+		final EventManager eventManager = context.getSession().getEventManager();
+		final HibernateMonitoringEvent jdbcPreparedStatementExecutionEvent = eventManager.beginJdbcPreparedStatementExecutionEvent();
 		try {
 			final boolean isResultSet = jdbcStatement.execute();
 			currentReturnState = buildCurrentReturnState( isResultSet );
 		}
 		catch (SQLException e) {
 			throw convert( e, "Error calling CallableStatement.getMoreResults" );
+		}
+		finally {
+			eventManager.completeJdbcPreparedStatementExecutionEvent( jdbcPreparedStatementExecutionEvent, sql );
+			sqlStatementLogger.logSlowQuery( sql, executeStartNanos, this.context.getSession().getJdbcSessionContext() );
 		}
 	}
 
@@ -177,77 +193,84 @@ public class OutputsImpl implements Outputs {
 				null,
 				null,
 				this.context.getQueryOptions(),
+				true,
 				resultSetMapping.resolve( resultSetAccess, context.getSession().getLoadQueryInfluencers(), getSessionFactory() ),
 				null,
 				executionContext
 		);
 
-		//noinspection unchecked
-		final RowReader<Object> rowReader = (RowReader<Object>) ResultsHelper.createRowReader(
-				executionContext,
-				null,
-				RowTransformerStandardImpl.INSTANCE,
-				null,
-				jdbcValues
-		);
-
-		/*
-		 * Processing options effectively are only used for entity loading.  Here we don't need these values.
-		 */
-		final JdbcValuesSourceProcessingOptions processingOptions = new JdbcValuesSourceProcessingOptions() {
-			@Override
-			public Object getEffectiveOptionalObject() {
-				return null;
-			}
-
-			@Override
-			public String getEffectiveOptionalEntityName() {
-				return null;
-			}
-
-			@Override
-			public Serializable getEffectiveOptionalId() {
-				return null;
-			}
-
-			@Override
-			public boolean shouldReturnProxies() {
-				return true;
-			}
-		};
-
-		final JdbcValuesSourceProcessingStateStandardImpl jdbcValuesSourceProcessingState =
-				new JdbcValuesSourceProcessingStateStandardImpl(
-						executionContext,
-						processingOptions
-				);
-		final ArrayList<Object> results = new ArrayList<>();
 		try {
+
+			//noinspection unchecked
+			final RowReader<Object> rowReader = (RowReader<Object>) ResultsHelper.createRowReader(
+					getSessionFactory(),
+					RowTransformerStandardImpl.INSTANCE,
+					null,
+					jdbcValues
+			);
+
+			/*
+			 * Processing options effectively are only used for entity loading.  Here we don't need these values.
+			 */
+			final JdbcValuesSourceProcessingOptions processingOptions = new JdbcValuesSourceProcessingOptions() {
+				@Override
+				public Object getEffectiveOptionalObject() {
+					return null;
+				}
+
+				@Override
+				public String getEffectiveOptionalEntityName() {
+					return null;
+				}
+
+				@Override
+				public Serializable getEffectiveOptionalId() {
+					return null;
+				}
+
+				@Override
+				public boolean shouldReturnProxies() {
+					return true;
+				}
+			};
+
+			final JdbcValuesSourceProcessingStateStandardImpl jdbcValuesSourceProcessingState =
+					new JdbcValuesSourceProcessingStateStandardImpl(
+							executionContext,
+							processingOptions
+					);
+			final ArrayList<Object> results = new ArrayList<>();
 			final RowProcessingStateStandardImpl rowProcessingState = new RowProcessingStateStandardImpl(
 					jdbcValuesSourceProcessingState,
 					executionContext,
 					rowReader,
 					jdbcValues
 			);
+			try {
 
-			while ( rowProcessingState.next() ) {
-				results.add( rowReader.readRow( rowProcessingState, processingOptions ) );
-				rowProcessingState.finishRowProcessing();
+				rowReader.startLoading( rowProcessingState );
+
+				while ( rowProcessingState.next() ) {
+					results.add( rowReader.readRow( rowProcessingState ) );
+					rowProcessingState.finishRowProcessing( true );
+				}
+				if ( resultSetMapping.getNumberOfResultBuilders() == 0
+						&& procedureCall.isFunctionCall()
+						&& procedureCall.getFunctionReturn().getJdbcTypeCode() == Types.REF_CURSOR
+						&& results.size() == 1
+						&& results.get( 0 ) instanceof ResultSet ) {
+					// When calling a function that returns a ref_cursor with as table function,
+					// we have to unnest the ResultSet manually here
+					return extractResults( (ResultSet) results.get( 0 ) );
+				}
+				return results;
 			}
-			if ( resultSetMapping.getNumberOfResultBuilders() == 0
-					&& procedureCall.isFunctionCall()
-					&& procedureCall.getFunctionReturn().getJdbcTypeCode() == Types.REF_CURSOR
-					&& results.size() == 1
-					&& results.get( 0 ) instanceof ResultSet ) {
-				// When calling a function that returns a ref_cursor with as table function,
-				// we have to unnest the ResultSet manually here
-				return extractResults( (ResultSet) results.get( 0 ) );
+			finally {
+				rowReader.finishUp( rowProcessingState );
+				jdbcValuesSourceProcessingState.finishUp( results.size() > 1 );
 			}
-			return results;
 		}
 		finally {
-			rowReader.finishUp( jdbcValuesSourceProcessingState );
-			jdbcValuesSourceProcessingState.finishUp( results.size() > 1 );
 			jdbcValues.finishUp( this.context.getSession() );
 		}
 	}

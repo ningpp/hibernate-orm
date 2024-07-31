@@ -19,6 +19,14 @@ import jakarta.persistence.criteria.CriteriaUpdate;
  */
 public interface QuerySettings {
 	/**
+	 * Specifies that division of two integers should produce an integer on all
+	 * databases. By default, integer division in HQL can produce a non-integer
+	 * on Oracle, MySQL, or MariaDB.
+	 *
+	 * @since 6.5
+	 */
+	String PORTABLE_INTEGER_DIVISION = "hibernate.query.hql.portable_integer_division";
+	/**
 	 * Specifies a {@link org.hibernate.query.hql.HqlTranslator} to use for HQL query
 	 * translation.
 	 */
@@ -90,8 +98,9 @@ public interface QuerySettings {
 	String CRITERIA_VALUE_HANDLING_MODE = "hibernate.criteria.value_handling_mode";
 
 	/**
-	 * Specifies the default {@linkplain NullPrecedence precedence of null values} in the HQL
-	 * {@code ORDER BY} clause, either {@code none}, {@code first}, or {@code last}.
+	 * Specifies the default {@linkplain NullPrecedence precedence of null values} in the
+	 * HQL {@code ORDER BY} clause, either {@code none}, {@code first}, or {@code last},
+	 * or an instance of {@link NullPrecedence}.
 	 * <p>
 	 * The default is {@code none}.
 	 *
@@ -131,7 +140,7 @@ public interface QuerySettings {
 	 * By default, this is set to false, i.e. native queries will be checked for ordinal placeholders.
 	 * <p>
 	 *
-	 * @see SessionFactoryOptions#getIgnoreNativeJdbcParameters()
+	 * @see SessionFactoryOptions#getNativeJdbcParametersIgnored()
 	 */
 	String NATIVE_IGNORE_JDBC_PARAMETERS = "hibernate.query.native.ignore_jdbc_parameters";
 

@@ -76,7 +76,6 @@ import org.hibernate.jpa.boot.spi.StrategyRegistrationProviderList;
 import org.hibernate.jpa.boot.spi.TypeContributorList;
 import org.hibernate.jpa.internal.util.LogHelper;
 import org.hibernate.jpa.internal.util.PersistenceUnitTransactionTypeHelper;
-import org.hibernate.mapping.PersistentClass;
 import org.hibernate.proxy.EntityNotFoundDelegate;
 import org.hibernate.resource.transaction.backend.jdbc.internal.JdbcResourceLocalTransactionCoordinatorBuilderImpl;
 import org.hibernate.resource.transaction.backend.jta.internal.JtaTransactionCoordinatorBuilderImpl;
@@ -246,7 +245,7 @@ public class EntityManagerFactoryBuilderImpl implements EntityManagerFactoryBuil
 			mergedIntegrationSettings.putAll( integrationSettings );
 		}
 
-		// Build the boot-strap service registry, which mainly handles class loader interactions
+		// Build the bootstrap service registry, which mainly handles classloader interactions
 		final BootstrapServiceRegistry bsr = buildBootstrapServiceRegistry(
 				mergedIntegrationSettings != null ? mergedIntegrationSettings : integrationSettings,
 				providedClassLoader,
@@ -283,7 +282,7 @@ public class EntityManagerFactoryBuilderImpl implements EntityManagerFactoryBuil
 
 			// todo : would be nice to have MetadataBuilder still do the handling of CfgXmlAccessService here
 			//		another option is to immediately handle them here (probably in mergeSettings?) as we encounter them...
-			final CfgXmlAccessService cfgXmlAccessService = standardServiceRegistry.getService( CfgXmlAccessService.class );
+			final CfgXmlAccessService cfgXmlAccessService = standardServiceRegistry.requireService( CfgXmlAccessService.class );
 			if ( cfgXmlAccessService.getAggregatedConfig() != null ) {
 				if ( cfgXmlAccessService.getAggregatedConfig().getMappingReferences() != null ) {
 					for ( MappingReference mappingReference : cfgXmlAccessService.getAggregatedConfig()
@@ -311,8 +310,6 @@ public class EntityManagerFactoryBuilderImpl implements EntityManagerFactoryBuil
 			}
 
 			// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-			// push back class transformation to the environment; for the time being this only has any effect in EE
-			// container situations, calling back into PersistenceUnitInfo#addClassTransformer
 
 			final boolean dirtyTrackingEnabled;
 			Object propertyValue = configurationValues.remove( ENHANCER_ENABLE_DIRTY_TRACKING );
@@ -345,6 +342,8 @@ public class EntityManagerFactoryBuilderImpl implements EntityManagerFactoryBuil
 						associationManagementEnabled
 				);
 
+				// push back class transformation to the environment; for the time being this only has any effect in EE
+				// container situations, calling back into PersistenceUnitInfo#addClassTransformer
 				persistenceUnit.pushClassTransformer( enhancementContext );
 				final ClassTransformer classTransformer = persistenceUnit.getClassTransformer();
 				if ( classTransformer != null ) {
@@ -414,10 +413,10 @@ public class EntityManagerFactoryBuilderImpl implements EntityManagerFactoryBuil
 			}
 		}
 
-		final StandardServiceRegistry serviceRegistry = metamodelBuilder.getBootstrapContext().getServiceRegistry();
-		final ClassLoaderService cls = serviceRegistry.getService( ClassLoaderService.class );
-		final Collection<MetadataBuilderContributor> contributors = cls.loadJavaServices( MetadataBuilderContributor.class );
-		contributors.forEach( (contributor) -> contributor.contribute( metamodelBuilder ) );
+		metamodelBuilder.getBootstrapContext().getServiceRegistry()
+				.requireService( ClassLoaderService.class )
+				.loadJavaServices( MetadataBuilderContributor.class )
+				.forEach( (contributor) -> contributor.contribute( metamodelBuilder ) );
 	}
 
 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1398,10 +1397,10 @@ public class EntityManagerFactoryBuilderImpl implements EntityManagerFactoryBuil
 			typeContributorList.getTypeContributors().forEach( metamodelBuilder::applyTypes );
 		}
 
-		final StandardServiceRegistry serviceRegistry = metamodelBuilder.getBootstrapContext().getServiceRegistry();
-		final ClassLoaderService cls = serviceRegistry.getService( ClassLoaderService.class );
-		final Collection<TypeContributor> typeContributors = cls.loadJavaServices( TypeContributor.class );
-		typeContributors.forEach( metamodelBuilder::applyTypes );
+		metamodelBuilder.getBootstrapContext().getServiceRegistry()
+				.requireService( ClassLoaderService.class )
+				.loadJavaServices( TypeContributor.class )
+				.forEach( metamodelBuilder::applyTypes );
 	}
 
 
@@ -1521,7 +1520,7 @@ public class EntityManagerFactoryBuilderImpl implements EntityManagerFactoryBuil
 
 	protected void populateSfBuilder(SessionFactoryBuilder sfBuilder, StandardServiceRegistry ssr) {
 
-		final StrategySelector strategySelector = ssr.getService( StrategySelector.class );
+		final StrategySelector strategySelector = ssr.requireService( StrategySelector.class );
 
 //		// Locate and apply the requested SessionFactory-level interceptor (if one)
 //		final Object sessionFactoryInterceptorSetting = configurationValues.remove( org.hibernate.cfg.AvailableSettings.INTERCEPTOR );
@@ -1660,9 +1659,8 @@ public class EntityManagerFactoryBuilderImpl implements EntityManagerFactoryBuil
 		else if ( settingValue instanceof String ) {
 			String settingStringValue = (String) settingValue;
 			if ( standardServiceRegistry != null ) {
-				final ClassLoaderService classLoaderService = standardServiceRegistry.getService( ClassLoaderService.class );
-
-				instanceClass = classLoaderService.classForName( settingStringValue );
+				instanceClass = standardServiceRegistry.requireService( ClassLoaderService.class )
+						.classForName( settingStringValue );
 			}
 			else {
 				try {

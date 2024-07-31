@@ -55,14 +55,14 @@ targetEntity
  * A 'delete' statement
  */
 deleteStatement
-	: DELETE FROM? targetEntity whereClause?
+	: DELETE FROM? entityWithJoins whereClause?
 	;
 
 /**
  * An 'update' statement
  */
 updateStatement
-	: UPDATE VERSIONED? targetEntity setClause whereClause?
+	: UPDATE VERSIONED? entityWithJoins setClause whereClause?
 	;
 
 /**
@@ -83,7 +83,7 @@ assignment
  * An 'insert' statement
  */
 insertStatement
-	: INSERT INTO? targetEntity targetFields (queryExpression | valuesList)
+	: INSERT INTO? targetEntity targetFields (queryExpression | valuesList) conflictClause?
 	;
 
 /**
@@ -105,6 +105,23 @@ valuesList
  */
 values
 	: LEFT_PAREN expressionOrPredicate (COMMA expressionOrPredicate)* RIGHT_PAREN
+	;
+
+/**
+ * a 'conflict' clause in an 'insert' statement
+ */
+conflictClause
+	: ON CONFLICT conflictTarget? DO conflictAction
+	;
+
+conflictTarget
+	: ON CONSTRAINT identifier
+	| LEFT_PAREN simplePath (COMMA simplePath)* RIGHT_PAREN
+	;
+
+conflictAction
+	: NOTHING
+	| UPDATE setClause whereClause?
 	;
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -413,12 +430,19 @@ pathContinuation
  *		* VALUE( path )
  * 		* KEY( path )
  * 		* path[ selector ]
+ * 		* ARRAY_GET( embeddableArrayPath, index ).path
+ * 		* COALESCE( array1, array2 )[ selector ].path
  */
 syntacticDomainPath
 	: treatedNavigablePath
 	| collectionValueNavigablePath
 	| mapKeyNavigablePath
 	| simplePath indexedPathAccessFragment
+	| simplePath slicedPathAccessFragment
+	| toOneFkReference
+	| function pathContinuation
+	| function indexedPathAccessFragment pathContinuation?
+	| function slicedPathAccessFragment
 	;
 
 /**
@@ -439,6 +463,13 @@ generalPathFragment
  */
 indexedPathAccessFragment
 	: LEFT_BRACKET expression RIGHT_BRACKET (DOT generalPathFragment)?
+	;
+
+/**
+ * The slice operator to obtain elements between the lower and upper bound.
+ */
+slicedPathAccessFragment
+	: LEFT_BRACKET expression COLON expression RIGHT_BRACKET
 	;
 
 /**
@@ -642,6 +673,9 @@ predicate
 	| expression NOT? IN inList													# InPredicate
 	| expression NOT? BETWEEN expression AND expression							# BetweenPredicate
 	| expression NOT? (LIKE | ILIKE) expression likeEscape?						# LikePredicate
+	| expression NOT? CONTAINS expression										# ContainsPredicate
+	| expression NOT? INCLUDES expression										# IncludesPredicate
+	| expression NOT? INTERSECTS expression										# IntersectsPredicate
 	| expression comparisonOperator expression									# ComparisonPredicate
 	| EXISTS collectionQuantifier LEFT_PAREN simplePath RIGHT_PAREN				# ExistsCollectionPartPredicate
 	| EXISTS expression															# ExistsPredicate
@@ -673,6 +707,7 @@ inList
 	| LEFT_PAREN (expressionOrPredicate (COMMA expressionOrPredicate)*)? RIGHT_PAREN# ExplicitTupleInList
 	| LEFT_PAREN subquery RIGHT_PAREN												# SubqueryInList
 	| parameter 																	# ParamInList
+	| expression 																	# ArrayInList
 	;
 
 /**
@@ -715,7 +750,6 @@ primaryExpression
 	| entityIdReference									# EntityIdExpression
 	| entityVersionReference							# EntityVersionExpression
 	| entityNaturalIdReference							# EntityNaturalIdExpression
-	| toOneFkReference									# ToOneFkExpression
 	| syntacticDomainPath pathContinuation?				# SyntacticPathExpression
 	| function											# FunctionExpression
 	| generalPathFragment								# GeneralPathExpression
@@ -868,6 +902,7 @@ literal
 	| numericLiteral
 	| binaryLiteral
 	| temporalLiteral
+	| arrayLiteral
 	| generalizedLiteral
 	;
 
@@ -1040,6 +1075,13 @@ genericTemporalLiteralText
 /**
  * A generic format for specifying literal values of arbitary types
  */
+arrayLiteral
+	: LEFT_BRACKET (expression (COMMA expression)*)? RIGHT_BRACKET
+	;
+
+/**
+ * A generic format for specifying literal values of arbitary types
+ */
 generalizedLiteral
 	: LEFT_BRACE generalizedLiteralType COLON generalizedLiteralText RIGHT_BRACE
 	;
@@ -1066,6 +1108,7 @@ function
 	| collectionAggregateFunction
 	| collectionFunctionMisuse
 	| jpaNonstandardFunction
+	| columnFunction
 	| genericFunction
 	;
 
@@ -1073,7 +1116,7 @@ function
  * A syntax for calling user-defined or native database functions, required by JPQL
  */
 jpaNonstandardFunction
-	: FUNCTION LEFT_PAREN jpaNonstandardFunctionName (COMMA genericFunctionArguments)? RIGHT_PAREN
+	: FUNCTION LEFT_PAREN jpaNonstandardFunctionName (AS castTarget)? (COMMA genericFunctionArguments)? RIGHT_PAREN
 	;
 
 /**
@@ -1081,7 +1124,12 @@ jpaNonstandardFunction
  */
 jpaNonstandardFunctionName
 	: STRING_LITERAL
+	| identifier
 	;
+
+columnFunction
+    : COLUMN LEFT_PAREN path DOT jpaNonstandardFunctionName (AS castTarget)? RIGHT_PAREN
+    ;
 
 /**
  * Any function invocation that follows the regular syntax
@@ -1357,6 +1405,7 @@ trimSpecification
 
 trimCharacter
 	: STRING_LITERAL
+	| parameter
 	;
 
 /**
@@ -1600,6 +1649,10 @@ rollup
 	| CASE
 	| CAST
 	| COLLATE
+	| COLUMN
+	| CONFLICT
+	| CONSTRAINT
+	| CONTAINS
 	| COUNT
 	| CROSS
 	| CUBE
@@ -1617,6 +1670,7 @@ rollup
 	| DEPTH
 	| DESC
 	| DISTINCT
+	| DO
 	| ELEMENT
 	| ELEMENTS
 	| ELSE
@@ -1634,6 +1688,7 @@ rollup
 	| FETCH
 	| FILTER
 	| FIRST
+	| FK
 	| FOLLOWING
 	| FOR
 	| FORMAT
@@ -1649,11 +1704,13 @@ rollup
 	| ILIKE
 	| IN
 	| INDEX
+	| INCLUDES
 	| INDICES
 //	| INNER
 	| INSERT
 	| INSTANT
 	| INTERSECT
+	| INTERSECTS
 	| INTO
 	| IS
 	| JOIN
@@ -1690,6 +1747,7 @@ rollup
 	| NEXT
 	| NO
 	| NOT
+	| NOTHING
 	| NULLS
 	| OBJECT
 	| OF

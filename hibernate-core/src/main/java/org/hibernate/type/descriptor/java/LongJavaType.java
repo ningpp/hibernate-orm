@@ -47,7 +47,7 @@ public class LongJavaType extends AbstractClassJavaType<Long>
 		if ( value == null ) {
 			return null;
 		}
-		if ( Long.class.isAssignableFrom( type ) ) {
+		if ( Long.class.isAssignableFrom( type ) || type == Object.class ) {
 			return (X) value;
 		}
 		if ( Byte.class.isAssignableFrom( type ) ) {
@@ -96,7 +96,7 @@ public class LongJavaType extends AbstractClassJavaType<Long>
 
 	@Override
 	public boolean isWider(JavaType<?> javaType) {
-		switch ( javaType.getJavaType().getTypeName() ) {
+		switch ( javaType.getTypeName() ) {
 			case "byte":
 			case "java.lang.Byte":
 			case "short":

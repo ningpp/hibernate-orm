@@ -137,6 +137,7 @@ public class SimpleDeleteQueryPlan implements NonSelectQueryPlan {
 							collectionTableGroup,
 							factory.getJdbcServices().getDialect().getDmlTargetColumnQualifierSupport() == DmlTargetColumnQualifierSupport.TABLE_ALIAS,
 							executionContext.getSession().getLoadQueryInfluencers().getEnabledFilters(),
+							false,
 							null,
 							null
 					);
@@ -172,12 +173,7 @@ public class SimpleDeleteQueryPlan implements NonSelectQueryPlan {
 							tableGroup
 					);
 
-					matchingIdSubQuery.applyPredicate( SqmMutationStrategyHelper.getIdSubqueryPredicate(
-							sqmInterpretation.getSqlAst().getRestriction(),
-							entityDescriptor,
-							tableGroup,
-							session
-					) );
+					matchingIdSubQuery.applyPredicate( sqmInterpretation.getSqlAst().getRestriction() );
 
 					return Predicate.combinePredicates(
 							additionalPredicate.get(),

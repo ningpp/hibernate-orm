@@ -10,10 +10,6 @@ plugins {
     id 'org.hibernate.build.xjc-jakarta'
 }
 
-repositories {
-    gradlePluginPortal()
-}
-
 description = 'Hibernate\'s core ORM functionality'
 
 apply from: rootProject.file( 'gradle/published-java-module.gradle' )
@@ -70,8 +66,8 @@ dependencies {
     testRuntimeOnly libs.byteBuddy
     testRuntimeOnly testLibs.weld
     testRuntimeOnly testLibs.wildFlyTxnClient
-    testRuntimeOnly jakartaLibs.jsonb
-    testRuntimeOnly libs.jackson
+    testImplementation jakartaLibs.jsonb
+    testImplementation libs.jackson
     testRuntimeOnly libs.jacksonXml
     testRuntimeOnly libs.jacksonJsr310
 
@@ -102,17 +98,8 @@ ext {
 }
 
 sourceSets {
-    main {
-        // add the XJC generated JAXB classes to the main source-set
-        java{
-            srcDir project.jaxbTargetDir
-        }
-    }
-
-    // resources inherently exclude sources
     test {
         resources {
-            srcDir 'src/test/java'
             srcDir 'src/test/resources'
             srcDir 'src/test/bundles'
         }
@@ -152,6 +139,7 @@ task copyBundleResourcesXml (type: Copy) {
                 'jdbc.user' : dbBundle[db]['jdbc.user'].replace("&", "&amp;"),
                 'jdbc.pass' : dbBundle[db]['jdbc.pass'].replace("&", "&amp;"),
                 'jdbc.url' : dbBundle[db]['jdbc.url'].replace("&", "&amp;"),
+                'jdbc.datasource' : dbBundle[db]['jdbc.datasource'].replace("&", "&amp;"),
                 'connection.init_sql' : dbBundle[db]['connection.init_sql'].replace("&", "&amp;")
         ]
         ext.bundleTokens['buildDirName'] = project.relativePath( buildDir )
@@ -228,7 +216,7 @@ task generateEnversStaticMetamodel(
     options.compilerArgs = [
             "-proc:only",
             "-processor",
-            "org.hibernate.jpamodelgen.JPAMetaModelEntityProcessor"
+            "org.hibernate.processor.HibernateProcessor"
     ]
 
     // put static metamodel classes back out to the source tree since they're version controlled.
@@ -237,6 +225,8 @@ task generateEnversStaticMetamodel(
 
 tasks.withType( Test.class ).each { test ->
     test.systemProperty 'file.encoding', 'utf-8'
+    // Allow creating a function in HSQLDB for this Java method
+    test.systemProperty 'hsqldb.method_class_names', 'org.hibernate.orm.test.jpa.transaction.TransactionTimeoutTest.sleep'
 
     // See org.hibernate.boot.model.naming.NamingHelperTest.DefaultCharset.set
     test.jvmArgs( ['--add-opens', 'java.base/java.nio.charset=ALL-UNNAMED'] )
@@ -249,6 +239,10 @@ tasks.withType( Test.class ).each { test ->
 
     test.beforeTest { descriptor ->
         //println "Starting test: " + descriptor
+    }
+    if ( project.db == "h2" || project.db == "hsqldb" || project.db == "derby" ) {
+        // Parallel test runs when running with in-memory databases
+        test.maxParallelForks = Runtime.runtime.availableProcessors().intdiv( 2 ) ?: 1
     }
 }
 
@@ -300,12 +294,6 @@ if ( jdkVersions.test.release.asInt() >= 17 && jdkVersions.explicit ) {
         useJUnitPlatform()
         testClassesDirs = sourceSets.testJava17.output.classesDirs
         classpath = sourceSets.testJava17.runtimeClasspath
-
-        if ( jdkVersions.test.launcher.asInt() >= 19 ) {
-            logger.warn( "The version of Java bytecode that will be tested is not supported by Byte Buddy by default. " +
-                                 " Setting 'net.bytebuddy.experimental=true'." )
-            systemProperty 'net.bytebuddy.experimental', true
-        }
     }
 
     testClasses.dependsOn compileTestJava17Java

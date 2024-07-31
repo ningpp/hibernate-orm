@@ -11,13 +11,16 @@ import java.util.List;
 import org.hibernate.LockMode;
 import org.hibernate.LockOptions;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
+import org.hibernate.internal.util.collections.Stack;
 import org.hibernate.metamodel.mapping.JdbcMappingContainer;
+import org.hibernate.query.IllegalQueryOperationException;
 import org.hibernate.query.sqm.ComparisonOperator;
 import org.hibernate.query.sqm.FetchClauseType;
 import org.hibernate.sql.ast.Clause;
 import org.hibernate.sql.ast.SqlAstJoinType;
 import org.hibernate.sql.ast.spi.SqlSelection;
 import org.hibernate.sql.ast.tree.Statement;
+import org.hibernate.sql.ast.tree.delete.DeleteStatement;
 import org.hibernate.sql.ast.tree.expression.BinaryArithmeticExpression;
 import org.hibernate.sql.ast.tree.expression.Expression;
 import org.hibernate.sql.ast.tree.expression.Literal;
@@ -28,12 +31,15 @@ import org.hibernate.sql.ast.tree.from.TableGroup;
 import org.hibernate.sql.ast.tree.from.TableGroupJoin;
 import org.hibernate.sql.ast.tree.from.TableReference;
 import org.hibernate.sql.ast.tree.from.UnionTableReference;
+import org.hibernate.sql.ast.tree.insert.ConflictClause;
+import org.hibernate.sql.ast.tree.insert.InsertSelectStatement;
 import org.hibernate.sql.ast.tree.predicate.Predicate;
 import org.hibernate.sql.ast.tree.select.QueryGroup;
 import org.hibernate.sql.ast.tree.select.QueryPart;
 import org.hibernate.sql.ast.tree.select.QuerySpec;
 import org.hibernate.sql.ast.tree.select.SelectClause;
 import org.hibernate.sql.ast.tree.select.SortSpecification;
+import org.hibernate.sql.ast.tree.update.UpdateStatement;
 import org.hibernate.sql.exec.spi.JdbcOperation;
 import org.hibernate.sql.model.internal.OptionalTableUpdate;
 import org.hibernate.type.SqlTypes;
@@ -51,6 +57,85 @@ public class SQLServerSqlAstTranslator<T extends JdbcOperation> extends SqlAstTr
 
 	public SQLServerSqlAstTranslator(SessionFactoryImplementor sessionFactory, Statement statement) {
 		super( sessionFactory, statement );
+	}
+
+	@Override
+	protected void visitInsertStatementOnly(InsertSelectStatement statement) {
+		if ( statement.getConflictClause() == null || statement.getConflictClause().isDoNothing() ) {
+			// Render plain insert statement and possibly run into unique constraint violation
+			super.visitInsertStatementOnly( statement );
+		}
+		else {
+			visitInsertStatementEmulateMerge( statement );
+			// A merge statement must end with a `;` on SQL Server
+			appendSql( ';' );
+		}
+	}
+
+	@Override
+	protected void renderDeleteClause(DeleteStatement statement) {
+		appendSql( "delete" );
+		final Stack<Clause> clauseStack = getClauseStack();
+		try {
+			clauseStack.push( Clause.DELETE );
+			renderTableReferenceIdentificationVariable( statement.getTargetTable() );
+			if ( statement.getFromClause().getRoots().isEmpty() ) {
+				appendSql( " from " );
+				renderDmlTargetTableExpression( statement.getTargetTable() );
+			}
+			else {
+				visitFromClause( statement.getFromClause() );
+			}
+		}
+		finally {
+			clauseStack.pop();
+		}
+	}
+
+	@Override
+	protected void renderUpdateClause(UpdateStatement updateStatement) {
+		appendSql( "update" );
+		final Stack<Clause> clauseStack = getClauseStack();
+		try {
+			clauseStack.push( Clause.UPDATE );
+			renderTableReferenceIdentificationVariable( updateStatement.getTargetTable() );
+		}
+		finally {
+			clauseStack.pop();
+		}
+	}
+
+	@Override
+	protected void renderDmlTargetTableExpression(NamedTableReference tableReference) {
+		super.renderDmlTargetTableExpression( tableReference );
+		if ( getClauseStack().getCurrent() != Clause.INSERT ) {
+			renderTableReferenceIdentificationVariable( tableReference );
+		}
+	}
+
+	@Override
+	protected boolean supportsJoinsInDelete() {
+		return true;
+	}
+
+	@Override
+	protected void renderFromClauseAfterUpdateSet(UpdateStatement statement) {
+		if ( statement.getFromClause().getRoots().isEmpty() ) {
+			appendSql( " from " );
+			renderDmlTargetTableExpression( statement.getTargetTable() );
+		}
+		else {
+			visitFromClause( statement.getFromClause() );
+		}
+	}
+
+	@Override
+	protected void visitConflictClause(ConflictClause conflictClause) {
+		if ( conflictClause != null ) {
+			if ( conflictClause.isDoUpdate() && conflictClause.getConstraintName() != null ) {
+				throw new IllegalQueryOperationException( "Insert conflict 'do update' clause with constraint name is not supported" );
+			}
+		}
 	}
 
 	@Override
@@ -128,14 +213,7 @@ public class SQLServerSqlAstTranslator<T extends JdbcOperation> extends SqlAstTr
 			appendSql( " )" );
 
 			registerAffectedTable( tableReference );
-			final Clause currentClause = getClauseStack().getCurrent();
-			if ( rendersTableReferenceAlias( currentClause ) ) {
-				final String identificationVariable = tableReference.getIdentificationVariable();
-				if ( identificationVariable != null ) {
-					appendSql( ' ' );
-					appendSql( identificationVariable );
-				}
-			}
+			renderTableReferenceIdentificationVariable( tableReference );
 		}
 		else {
 			super.renderNamedTableReference( tableReference, lockMode );
@@ -194,12 +272,20 @@ public class SQLServerSqlAstTranslator<T extends JdbcOperation> extends SqlAstTr
 	}
 
 	@Override
+	protected LockStrategy determineLockingStrategy(
+			QuerySpec querySpec,
+			ForUpdateClause forUpdateClause,
+			Boolean followOnLocking) {
+		// No need for follow on locking
+		return LockStrategy.CLAUSE;
+	}
+
+	@Override
 	protected void renderForUpdateClause(QuerySpec querySpec, ForUpdateClause forUpdateClause) {
 		// SQL Server does not support the FOR UPDATE clause
 	}
 
 	protected OffsetFetchClauseMode getOffsetFetchClauseMode(QueryPart queryPart) {
-		final DatabaseVersion version = getDialect().getVersion();
 		final boolean hasLimit;
 		final boolean hasOffset;
 		if ( queryPart.isRoot() && hasLimit() ) {
@@ -285,11 +371,6 @@ public class SQLServerSqlAstTranslator<T extends JdbcOperation> extends SqlAstTr
 			lateralPredicate = null;
 		}
 		super.visitSelectClause( selectClause );
-	}
-
-	@Override
-	protected boolean needsRowsToSkip() {
-		return false;
 	}
 
 	@Override
@@ -420,9 +501,9 @@ public class SQLServerSqlAstTranslator<T extends JdbcOperation> extends SqlAstTr
 	@Override
 	public void visitBinaryArithmeticExpression(BinaryArithmeticExpression arithmeticExpression) {
 		appendSql( OPEN_PARENTHESIS );
-		arithmeticExpression.getLeftHandOperand().accept( this );
+		visitArithmeticOperand( arithmeticExpression.getLeftHandOperand() );
 		appendSql( arithmeticExpression.getOperator().getOperatorSqlTextString() );
-		arithmeticExpression.getRightHandOperand().accept( this );
+		visitArithmeticOperand( arithmeticExpression.getRightHandOperand() );
 		appendSql( CLOSE_PARENTHESIS );
 	}
 
@@ -450,5 +531,16 @@ public class SQLServerSqlAstTranslator<T extends JdbcOperation> extends SqlAstTr
 	protected void renderMergeStatement(OptionalTableUpdate optionalTableUpdate) {
 		super.renderMergeStatement( optionalTableUpdate );
 		appendSql( ";" );
+	}
+
+	@Override
+	protected void renderStringContainsExactlyPredicate(Expression haystack, Expression needle) {
+		// SQL Server ignores NUL characters in string on case-insensitive collations, so we force a binary collation.
+		// This is needed for the emulation of cycle detection in recursive queries
+		appendSql( "charindex(" );
+		needle.accept( this );
+		appendSql( " collate Latin1_General_100_BIN2," );
+		haystack.accept( this );
+		append( ")>0" );
 	}
 }

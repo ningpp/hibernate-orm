@@ -7,24 +7,31 @@
 package org.hibernate.sql.results.graph.collection.internal;
 
 import java.util.List;
+import java.util.function.BiConsumer;
 
 import org.hibernate.HibernateException;
 import org.hibernate.LockMode;
 import org.hibernate.collection.spi.PersistentList;
-import org.hibernate.engine.spi.CollectionKey;
 import org.hibernate.internal.log.LoggingHelper;
 import org.hibernate.metamodel.mapping.PluralAttributeMapping;
 import org.hibernate.spi.NavigablePath;
+import org.hibernate.sql.results.graph.AssemblerCreationState;
+import org.hibernate.sql.results.graph.DomainResult;
 import org.hibernate.sql.results.graph.DomainResultAssembler;
-import org.hibernate.sql.results.graph.FetchParentAccess;
+import org.hibernate.sql.results.graph.Fetch;
+import org.hibernate.sql.results.graph.Initializer;
+import org.hibernate.sql.results.graph.InitializerData;
+import org.hibernate.sql.results.graph.InitializerParent;
 import org.hibernate.sql.results.jdbc.spi.RowProcessingState;
+
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
  * CollectionInitializer for PersistentList loading
  * 
  * @author Steve Ebersole
  */
-public class ListInitializer extends AbstractImmediateCollectionInitializer {
+public class ListInitializer extends AbstractImmediateCollectionInitializer<AbstractImmediateCollectionInitializer.ImmediateCollectionInitializerData> {
 	private static final String CONCRETE_NAME = ListInitializer.class.getSimpleName();
 
 	private final DomainResultAssembler<Integer> listIndexAssembler;
@@ -35,22 +42,27 @@ public class ListInitializer extends AbstractImmediateCollectionInitializer {
 	public ListInitializer(
 			NavigablePath navigablePath,
 			PluralAttributeMapping attributeMapping,
-			FetchParentAccess parentAccess,
+			InitializerParent<?> parent,
 			LockMode lockMode,
-			DomainResultAssembler<?> collectionKeyAssembler,
-			DomainResultAssembler<?> collectionValueKeyAssembler,
-			DomainResultAssembler<Integer> listIndexAssembler,
-			DomainResultAssembler<?> elementAssembler) {
+			DomainResult<?> collectionKeyResult,
+			DomainResult<?> collectionValueKeyResult,
+			boolean isResultInitializer,
+			AssemblerCreationState creationState,
+			Fetch listIndexFetch,
+			Fetch elementFetch) {
 		super(
 				navigablePath,
 				attributeMapping,
-				parentAccess,
+				parent,
 				lockMode,
-				collectionKeyAssembler,
-				collectionValueKeyAssembler
+				collectionKeyResult,
+				collectionValueKeyResult,
+				isResultInitializer,
+				creationState
 		);
-		this.listIndexAssembler = listIndexAssembler;
-		this.elementAssembler = elementAssembler;
+		//noinspection unchecked
+		this.listIndexAssembler = (DomainResultAssembler<Integer>) listIndexFetch.createAssembler( this, creationState );
+		this.elementAssembler = elementFetch.createAssembler( this, creationState );
 		this.listIndexBase = attributeMapping.getIndexMetadata().getListIndexBase();
 	}
 
@@ -60,15 +72,22 @@ public class ListInitializer extends AbstractImmediateCollectionInitializer {
 	}
 
 	@Override
-	public PersistentList<?> getCollectionInstance() {
-		return (PersistentList<?>) super.getCollectionInstance();
+	protected void forEachSubInitializer(BiConsumer<Initializer<?>, RowProcessingState> consumer, InitializerData data) {
+		super.forEachSubInitializer( consumer, data );
+		final Initializer<?> initializer = elementAssembler.getInitializer();
+		if ( initializer != null ) {
+			consumer.accept( initializer, data.getRowProcessingState() );
+		}
 	}
 
 	@Override
-	protected void readCollectionRow(
-			CollectionKey collectionKey,
-			List<Object> loadingState,
-			RowProcessingState rowProcessingState) {
+	public @Nullable PersistentList<?> getCollectionInstance(ImmediateCollectionInitializerData data) {
+		return (PersistentList<?>) super.getCollectionInstance( data );
+	}
+
+	@Override
+	protected void readCollectionRow(ImmediateCollectionInitializerData data, List<Object> loadingState) {
+		final RowProcessingState rowProcessingState = data.getRowProcessingState();
 		final Integer indexValue = listIndexAssembler.assemble( rowProcessingState );
 		if ( indexValue == null ) {
 			throw new HibernateException( "Illegal null value for list index encountered while reading: "
@@ -90,6 +109,42 @@ public class ListInitializer extends AbstractImmediateCollectionInitializer {
 		}
 
 		loadingState.set( index, element );
+	}
+
+	@Override
+	protected void initializeSubInstancesFromParent(ImmediateCollectionInitializerData data) {
+		final Initializer<?> initializer = elementAssembler.getInitializer();
+		if ( initializer != null ) {
+			final RowProcessingState rowProcessingState = data.getRowProcessingState();
+			final PersistentList<?> list = getCollectionInstance( data );
+			assert list != null;
+			for ( Object element : list ) {
+				initializer.initializeInstanceFromParent( element, rowProcessingState );
+			}
+		}
+	}
+
+	@Override
+	protected void resolveInstanceSubInitializers(ImmediateCollectionInitializerData data) {
+		final Initializer<?> initializer = elementAssembler.getInitializer();
+		if ( initializer != null ) {
+			final RowProcessingState rowProcessingState = data.getRowProcessingState();
+			final PersistentList<?> list = getCollectionInstance( data );
+			assert list != null;
+			for ( Object element : list ) {
+				initializer.resolveInstance( element, rowProcessingState );
+			}
+		}
+	}
+
+	@Override
+	public DomainResultAssembler<?> getIndexAssembler() {
+		return listIndexAssembler;
+	}
+
+	@Override
+	public DomainResultAssembler<?> getElementAssembler() {
+		return elementAssembler;
 	}
 
 	@Override

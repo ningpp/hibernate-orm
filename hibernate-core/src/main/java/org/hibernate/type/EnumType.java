@@ -59,6 +59,7 @@ public class EnumType<T extends Enum<T>>
 
 	private Class<T> enumClass;
 
+	private boolean isOrdinal;
 	private JdbcType jdbcType;
 	private EnumJavaType<T> enumJavaType;
 
@@ -115,7 +116,7 @@ public class EnumType<T extends Enum<T>>
 		if ( parameters.containsKey( ENUM ) ) {
 			final String enumClassName = (String) parameters.get( ENUM );
 			try {
-				enumClass = ReflectHelper.classForName( enumClassName, this.getClass() ).asSubclass( Enum.class );
+				enumClass = (Class<T>) ReflectHelper.classForName( enumClassName, this.getClass() ).asSubclass( Enum.class );
 			}
 			catch ( ClassNotFoundException exception ) {
 				throw new HibernateException("Enum class not found: " + enumClassName, exception);
@@ -131,6 +132,10 @@ public class EnumType<T extends Enum<T>>
 		if ( parameters.containsKey( TYPE ) ) {
 			int jdbcTypeCode = Integer.parseInt( (String) parameters.get( TYPE ) );
 			jdbcType = typeConfiguration.getJdbcTypeRegistry().getDescriptor( jdbcTypeCode );
+			isOrdinal = jdbcType.isInteger()
+					// Both, ENUM and NAMED_ENUM are treated like ordinal with respect to the ordering
+					|| jdbcType.getDefaultSqlTypeCode() == SqlTypes.ENUM
+					|| jdbcType.getDefaultSqlTypeCode() == SqlTypes.NAMED_ENUM;
 		}
 		else {
 			final LocalJdbcTypeIndicators indicators;
@@ -151,6 +156,7 @@ public class EnumType<T extends Enum<T>>
 				);
 			}
 			jdbcType = descriptor.getRecommendedJdbcType( indicators );
+			isOrdinal = indicators.getEnumeratedType() != STRING;
 		}
 
 		if ( LOG.isDebugEnabled() ) {
@@ -290,12 +296,12 @@ public class EnumType<T extends Enum<T>>
 	@Override @SuppressWarnings("unchecked")
 	public String toLoggableString(Object value, SessionFactoryImplementor factory) {
 		verifyConfigured();
-		return enumJavaType.toString( (T) value );
+		return enumJavaType.extractLoggableRepresentation( (T) value );
 	}
 
 	public boolean isOrdinal() {
 		verifyConfigured();
-		return jdbcType.isInteger();
+		return isOrdinal;
 	}
 
 	private class LocalJdbcTypeIndicators implements JdbcTypeIndicators {

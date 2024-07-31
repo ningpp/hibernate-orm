@@ -34,9 +34,8 @@ import org.hibernate.engine.jdbc.internal.FormatStyle;
 import org.hibernate.engine.jdbc.spi.SqlStatementLogger;
 import org.hibernate.engine.spi.SessionEventListenerManager;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
-import org.hibernate.event.jfr.JdbcPreparedStatementExecutionEvent;
-import org.hibernate.event.jfr.internal.JfrEventManager;
-import org.hibernate.event.jfr.JdbcPreparedStatementCreationEvent;
+import org.hibernate.event.spi.EventManager;
+import org.hibernate.event.spi.HibernateMonitoringEvent;
 import org.hibernate.id.ExportableColumn;
 import org.hibernate.id.IdentifierGeneratorHelper;
 import org.hibernate.id.IntegralDataTypeHolder;
@@ -333,11 +332,11 @@ public class TableGenerator implements PersistentIdentifierGenerator {
 
 	@Override
 	public void configure(Type type, Properties parameters, ServiceRegistry serviceRegistry) throws MappingException {
-		storeLastUsedValue = serviceRegistry.getService( ConfigurationService.class )
+		storeLastUsedValue = serviceRegistry.requireService( ConfigurationService.class )
 				.getSetting( AvailableSettings.TABLE_GENERATOR_STORE_LAST_USED, StandardConverters.BOOLEAN, true );
 		identifierType = type;
 
-		final JdbcEnvironment jdbcEnvironment = serviceRegistry.getService( JdbcEnvironment.class );
+		final JdbcEnvironment jdbcEnvironment = serviceRegistry.requireService( JdbcEnvironment.class );
 
 		qualifiedTableName = determineGeneratorTableName( parameters, jdbcEnvironment, serviceRegistry );
 		segmentColumnName = determineSegmentColumnName( parameters, jdbcEnvironment );
@@ -399,7 +398,7 @@ public class TableGenerator implements PersistentIdentifierGenerator {
 			}
 		}
 
-		final StrategySelector strategySelector = serviceRegistry.getService( StrategySelector.class );
+		final StrategySelector strategySelector = serviceRegistry.requireService( StrategySelector.class );
 
 		final String namingStrategySetting = coalesceSuppliedValues(
 				() -> {
@@ -410,7 +409,7 @@ public class TableGenerator implements PersistentIdentifierGenerator {
 					return localSetting;
 				},
 				() -> {
-					final ConfigurationService configurationService = serviceRegistry.getService( ConfigurationService.class );
+					final ConfigurationService configurationService = serviceRegistry.requireService( ConfigurationService.class );
 					final String globalSetting = getString( ID_DB_STRUCTURE_NAMING_STRATEGY, configurationService.getSettings() );
 					if ( globalSetting != null ) {
 						INCUBATION_LOGGER.incubatingSetting( ID_DB_STRUCTURE_NAMING_STRATEGY );
@@ -570,7 +569,7 @@ public class TableGenerator implements PersistentIdentifierGenerator {
 								new AbstractReturningWork<>() {
 									@Override
 									public IntegralDataTypeHolder execute(Connection connection) throws SQLException {
-										return nextValue( connection, statementLogger, statsCollector );
+										return nextValue( connection, statementLogger, statsCollector, session );
 									}
 								},
 								true
@@ -588,15 +587,16 @@ public class TableGenerator implements PersistentIdentifierGenerator {
 	private IntegralDataTypeHolder nextValue(
 			Connection connection,
 			SqlStatementLogger logger,
-			SessionEventListenerManager listener)
+			SessionEventListenerManager listener,
+			SharedSessionContractImplementor session)
 			throws SQLException {
 		final IntegralDataTypeHolder value = makeValue();
 		int rows;
 		do {
 
-			try ( PreparedStatement selectPS = prepareStatement( connection, selectQuery, logger, listener ) ) {
+			try ( PreparedStatement selectPS = prepareStatement( connection, selectQuery, logger, listener, session ) ) {
 				selectPS.setString( 1, segmentValue );
-				final ResultSet selectRS = executeQuery( selectPS, listener, selectQuery );
+				final ResultSet selectRS = executeQuery( selectPS, listener, selectQuery, session );
 				if ( !selectRS.next() ) {
 					long initializationValue;
 					if ( storeLastUsedValue ) {
@@ -607,11 +607,11 @@ public class TableGenerator implements PersistentIdentifierGenerator {
 					}
 					value.initialize( initializationValue );
 
-					try ( PreparedStatement statement = prepareStatement( connection, insertQuery, logger, listener ) ) {
+					try ( PreparedStatement statement = prepareStatement( connection, insertQuery, logger, listener, session ) ) {
 						LOG.tracef( "binding parameter [%s] - [%s]", 1, segmentValue );
 						statement.setString( 1, segmentValue );
 						value.bind( statement, 2 );
-						executeUpdate( statement, listener, insertQuery);
+						executeUpdate( statement, listener, insertQuery, session);
 					}
 				}
 				else {
@@ -632,7 +632,7 @@ public class TableGenerator implements PersistentIdentifierGenerator {
 			}
 
 
-			try ( PreparedStatement statement = prepareStatement( connection, updateQuery, logger, listener ) ) {
+			try ( PreparedStatement statement = prepareStatement( connection, updateQuery, logger, listener, session ) ) {
 				final IntegralDataTypeHolder updateValue = value.copy();
 				if ( optimizer.applyIncrementSizeToSourceValues() ) {
 					updateValue.add( incrementSize );
@@ -643,7 +643,7 @@ public class TableGenerator implements PersistentIdentifierGenerator {
 				updateValue.bind( statement, 1 );
 				value.bind( statement, 2 );
 				statement.setString( 3, segmentValue );
-				rows = executeUpdate( statement, listener, updateQuery );
+				rows = executeUpdate( statement, listener, updateQuery, session );
 			}
 			catch (SQLException e) {
 				LOG.unableToUpdateQueryHiValue( physicalTableName.render(), e );
@@ -665,39 +665,51 @@ public class TableGenerator implements PersistentIdentifierGenerator {
 			Connection connection,
 			String sql,
 			SqlStatementLogger logger,
-			SessionEventListenerManager listener) throws SQLException {
+			SessionEventListenerManager listener,
+			SharedSessionContractImplementor session) throws SQLException {
 		logger.logStatement( sql, FormatStyle.BASIC.getFormatter() );
-		final JdbcPreparedStatementCreationEvent jdbcPreparedStatementCreation = JfrEventManager.beginJdbcPreparedStatementCreationEvent();
+		final EventManager eventManager = session.getEventManager();
+		final HibernateMonitoringEvent jdbcPreparedStatementCreation = eventManager.beginJdbcPreparedStatementCreationEvent();
 		try {
 			listener.jdbcPrepareStatementStart();
 			return connection.prepareStatement( sql );
 		}
 		finally {
-			JfrEventManager.completeJdbcPreparedStatementCreationEvent( jdbcPreparedStatementCreation, sql );
+			eventManager.completeJdbcPreparedStatementCreationEvent( jdbcPreparedStatementCreation, sql );
 			listener.jdbcPrepareStatementEnd();
 		}
 	}
 
-	private int executeUpdate(PreparedStatement ps, SessionEventListenerManager listener, String sql ) throws SQLException {
-		final JdbcPreparedStatementExecutionEvent jdbcPreparedStatementExecutionEvent = JfrEventManager.beginJdbcPreparedStatementExecutionEvent();
+	private int executeUpdate(
+			PreparedStatement ps,
+			SessionEventListenerManager listener,
+			String sql,
+			SharedSessionContractImplementor session) throws SQLException {
+		final EventManager eventManager = session.getEventManager();
+		final HibernateMonitoringEvent jdbcPreparedStatementExecutionEvent = eventManager.beginJdbcPreparedStatementExecutionEvent();
 		try {
 			listener.jdbcExecuteStatementStart();
 			return ps.executeUpdate();
 		}
 		finally {
-			JfrEventManager.completeJdbcPreparedStatementExecutionEvent( jdbcPreparedStatementExecutionEvent, sql );
+			eventManager.completeJdbcPreparedStatementExecutionEvent( jdbcPreparedStatementExecutionEvent, sql );
 			listener.jdbcExecuteStatementEnd();
 		}
 	}
 
-	private ResultSet executeQuery(PreparedStatement ps, SessionEventListenerManager listener, String sql ) throws SQLException {
-		final JdbcPreparedStatementExecutionEvent jdbcPreparedStatementExecutionEvent = JfrEventManager.beginJdbcPreparedStatementExecutionEvent();
+	private ResultSet executeQuery(
+			PreparedStatement ps,
+			SessionEventListenerManager listener,
+			String sql,
+			SharedSessionContractImplementor session) throws SQLException {
+		final EventManager eventManager = session.getEventManager();
+		final HibernateMonitoringEvent jdbcPreparedStatementExecutionEvent = eventManager.beginJdbcPreparedStatementExecutionEvent();
 		try {
 			listener.jdbcExecuteStatementStart();
 			return ps.executeQuery();
 		}
 		finally {
-			JfrEventManager.completeJdbcPreparedStatementExecutionEvent( jdbcPreparedStatementExecutionEvent, sql );
+			eventManager.completeJdbcPreparedStatementExecutionEvent( jdbcPreparedStatementExecutionEvent, sql );
 			listener.jdbcExecuteStatementEnd();
 		}
 	}

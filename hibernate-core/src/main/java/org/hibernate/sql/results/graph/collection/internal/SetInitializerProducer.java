@@ -11,9 +11,9 @@ import org.hibernate.collection.spi.CollectionInitializerProducer;
 import org.hibernate.metamodel.mapping.PluralAttributeMapping;
 import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.results.graph.AssemblerCreationState;
-import org.hibernate.sql.results.graph.DomainResultAssembler;
+import org.hibernate.sql.results.graph.DomainResult;
 import org.hibernate.sql.results.graph.Fetch;
-import org.hibernate.sql.results.graph.FetchParentAccess;
+import org.hibernate.sql.results.graph.InitializerParent;
 import org.hibernate.sql.results.graph.collection.CollectionInitializer;
 
 /**
@@ -31,24 +31,25 @@ public class SetInitializerProducer implements CollectionInitializerProducer {
 	}
 
 	@Override
-	public CollectionInitializer produceInitializer(
+	public CollectionInitializer<?> produceInitializer(
 			NavigablePath navigablePath,
-			PluralAttributeMapping attributeMapping,
-			FetchParentAccess parentAccess,
+			PluralAttributeMapping attribute,
+			InitializerParent<?> parent,
 			LockMode lockMode,
-			DomainResultAssembler<?> collectionKeyAssembler,
-			DomainResultAssembler<?> collectionValueKeyAssembler,
+			DomainResult<?> collectionKeyResult,
+			DomainResult<?> collectionValueKeyResult,
+			boolean isResultInitializer,
 			AssemblerCreationState creationState) {
-		final DomainResultAssembler<?> elementAssembler = elementFetch.createAssembler( parentAccess, creationState );
-
 		return new SetInitializer(
 				navigablePath,
 				setDescriptor,
-				parentAccess,
+				parent,
 				lockMode,
-				collectionKeyAssembler,
-				collectionValueKeyAssembler,
-				elementAssembler
+				collectionKeyResult,
+				collectionValueKeyResult,
+				isResultInitializer,
+				creationState,
+				elementFetch
 		);
 	}
 }

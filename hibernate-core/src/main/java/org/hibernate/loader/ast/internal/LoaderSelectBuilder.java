@@ -7,7 +7,6 @@
 package org.hibernate.loader.ast.internal;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -29,9 +28,9 @@ import org.hibernate.loader.ast.spi.Loadable;
 import org.hibernate.loader.ast.spi.Loader;
 import org.hibernate.metamodel.CollectionClassification;
 import org.hibernate.metamodel.mapping.AttributeMapping;
-import org.hibernate.metamodel.mapping.BasicValuedModelPart;
 import org.hibernate.metamodel.mapping.CollectionPart;
 import org.hibernate.metamodel.mapping.EntityIdentifierMapping;
+import org.hibernate.metamodel.mapping.EntityMappingType;
 import org.hibernate.metamodel.mapping.EntityValuedModelPart;
 import org.hibernate.metamodel.mapping.ForeignKeyDescriptor;
 import org.hibernate.metamodel.mapping.ModelPart;
@@ -69,6 +68,7 @@ import org.hibernate.sql.ast.tree.predicate.ComparisonPredicate;
 import org.hibernate.sql.ast.tree.predicate.InArrayPredicate;
 import org.hibernate.sql.ast.tree.predicate.InListPredicate;
 import org.hibernate.sql.ast.tree.predicate.InSubQueryPredicate;
+import org.hibernate.sql.ast.tree.predicate.PredicateContainer;
 import org.hibernate.sql.ast.tree.select.QueryPart;
 import org.hibernate.sql.ast.tree.select.QuerySpec;
 import org.hibernate.sql.ast.tree.select.SelectStatement;
@@ -686,69 +686,39 @@ public class LoaderSelectBuilder {
 			TableGroup tableGroup,
 			PluralAttributeMapping pluralAttributeMapping,
 			SqlAstCreationState astCreationState) {
-		final NavigablePath parentNavigablePath = tableGroup.getNavigablePath().getParent();
-		if ( parentNavigablePath == null ) {
-			pluralAttributeMapping.applyBaseRestrictions(
-					querySpec::applyPredicate,
-					tableGroup,
-					true,
-					loadQueryInfluencers.getEnabledFilters(),
-					null,
-					astCreationState
-			);
-			pluralAttributeMapping.applyBaseManyToManyRestrictions(
-					querySpec::applyPredicate,
-					tableGroup,
-					true,
-					loadQueryInfluencers.getEnabledFilters(),
-					null,
-					astCreationState
-			);
-		}
-		else {
-			final TableGroup parentTableGroup = astCreationState.getFromClauseAccess().getTableGroup(
-					parentNavigablePath );
-			final TableGroupJoin pluralTableGroupJoin = parentTableGroup.findTableGroupJoin( tableGroup );
-			assert pluralTableGroupJoin != null;
-
-			final TableGroupJoin joinForPredicate;
-			if ( !tableGroup.getNestedTableGroupJoins().isEmpty() || tableGroup.getTableGroupJoins().isEmpty() ) {
-				joinForPredicate = pluralTableGroupJoin;
-			}
-			else {
-				joinForPredicate = tableGroup.getTableGroupJoins().get( tableGroup.getTableGroupJoins().size() - 1 );
-			}
-
-			pluralAttributeMapping.applyBaseRestrictions(
-					joinForPredicate::applyPredicate,
-					tableGroup,
-					true,
-					loadQueryInfluencers.getEnabledFilters(),
-					null,
-					astCreationState
-			);
-			pluralAttributeMapping.applyBaseManyToManyRestrictions(
-					joinForPredicate::applyPredicate,
-					tableGroup,
-					true,
-					loadQueryInfluencers.getEnabledFilters(),
-					null,
-					astCreationState
-			);
-		}
+		// Only apply restrictions for root table groups,
+		// because for table group joins the restriction is applied via PluralAttributeMappingImpl.createTableGroupJoin
+		assert tableGroup.getNavigablePath().getParent() == null;
+		pluralAttributeMapping.applyBaseRestrictions(
+				querySpec::applyPredicate,
+				tableGroup,
+				true,
+				loadQueryInfluencers.getEnabledFilters(),
+				false,
+				null,
+				astCreationState
+		);
+		pluralAttributeMapping.applyBaseManyToManyRestrictions(
+				querySpec::applyPredicate,
+				tableGroup,
+				true,
+				loadQueryInfluencers.getEnabledFilters(),
+				null,
+				astCreationState
+		);
 	}
 
 	private void applyFiltering(
-			QuerySpec querySpec,
+			PredicateContainer predicateContainer,
 			TableGroup tableGroup,
 			Restrictable restrictable,
 			SqlAstCreationState astCreationState) {
 		restrictable.applyBaseRestrictions(
-				querySpec::applyPredicate,
+				predicateContainer::applyPredicate,
 				tableGroup,
 				true,
-				// HHH-16179 Session.find should not apply filters
-				Collections.emptyMap(),//loadQueryInfluencers.getEnabledFilters(),
+				loadQueryInfluencers.getEnabledFilters(),
+				true,
 				null,
 				astCreationState
 		);
@@ -974,7 +944,7 @@ public class LoaderSelectBuilder {
 					}
 					else if ( fetchDepth > maximumFetchDepth + 1 ) {
 						// We can preserve the existing value of joined for basic and embedded values
-						if ( !( fetchable instanceof BasicValuedModelPart ) && !( fetchable instanceof EmbeddedAttributeMapping ) ) {
+						if ( fetchable.asBasicValuedModelPart() == null && !( fetchable instanceof EmbeddedAttributeMapping ) ) {
 							joined = false;
 						}
 					}
@@ -993,18 +963,10 @@ public class LoaderSelectBuilder {
 						creationState
 				);
 
-				if ( fetch.getTiming() == FetchTiming.IMMEDIATE && isFetchablePluralAttributeMapping ) {
-					final PluralAttributeMapping pluralAttributeMapping = (PluralAttributeMapping) fetchable;
-					if ( joined ) {
-						final TableGroup joinTableGroup = creationState.getFromClauseAccess()
-								.getTableGroup( fetchablePath );
+				if ( fetch.getTiming() == FetchTiming.IMMEDIATE && joined ) {
+					if ( isFetchablePluralAttributeMapping ) {
+						final PluralAttributeMapping pluralAttributeMapping = (PluralAttributeMapping) fetchable;
 						final QuerySpec querySpec = creationState.getInflightQueryPart().getFirstQuerySpec();
-						applyFiltering(
-								querySpec,
-								joinTableGroup,
-								pluralAttributeMapping,
-								creationState
-						);
 						applyOrdering(
 								querySpec,
 								fetchablePath,

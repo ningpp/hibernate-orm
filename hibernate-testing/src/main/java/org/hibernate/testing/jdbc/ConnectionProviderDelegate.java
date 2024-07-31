@@ -14,6 +14,7 @@ import java.util.Map;
 import org.hibernate.cfg.AvailableSettings;
 import org.hibernate.engine.jdbc.connections.internal.ConnectionProviderInitiator;
 import org.hibernate.engine.jdbc.connections.spi.ConnectionProvider;
+import org.hibernate.engine.jdbc.connections.spi.DatabaseConnectionInfo;
 import org.hibernate.service.spi.Configurable;
 import org.hibernate.service.spi.ServiceRegistryAwareService;
 import org.hibernate.service.spi.ServiceRegistryImplementor;
@@ -91,8 +92,8 @@ public class ConnectionProviderDelegate implements
 	}
 
 	@Override
-	public void closeConnection(Connection conn) throws SQLException {
-		connectionProvider.closeConnection( conn );
+	public void closeConnection(Connection connection) throws SQLException {
+		connectionProvider.closeConnection( connection );
 	}
 
 	@Override
@@ -101,6 +102,11 @@ public class ConnectionProviderDelegate implements
 			return true;
 		}
 		return connectionProvider.supportsAggressiveRelease();
+	}
+
+	@Override
+	public DatabaseConnectionInfo getDatabaseConnectionInfo() {
+		return connectionProvider.getDatabaseConnectionInfo();
 	}
 
 	@Override

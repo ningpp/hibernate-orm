@@ -43,8 +43,7 @@ import org.hibernate.type.spi.TypeConfiguration;
  * including implementors of {@link org.hibernate.type.Type}, {@link EntityPersister},
  * and {@link org.hibernate.persister.collection.CollectionPersister}.
  * <p>
- * The {@code Session}, via this interface and {@link SharedSessionContractImplementor},
- * implements:
+ * The {@code Session}, via this interface, implements:
  * <ul>
  *     <li>
  *         {@link JdbcSessionOwner}, and so the session also acts as the orchestrator
@@ -536,6 +535,14 @@ public interface SharedSessionContractImplementor
 	 * @return true if flush is required, false otherwise.
 	 */
 	boolean autoFlushIfRequired(Set<String> querySpaces) throws HibernateException;
+
+	default boolean autoFlushIfRequired(Set<String> querySpaces, boolean skipPreFlush)
+			throws HibernateException {
+		return autoFlushIfRequired( querySpaces );
+	}
+
+	default void autoPreFlush(){
+	}
 
 	/**
 	 * Are we currently enforcing a {@linkplain GraphSemantic#FETCH fetch graph}?

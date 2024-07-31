@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Properties;
@@ -18,6 +17,7 @@ import java.util.function.Supplier;
 
 import org.hibernate.FetchMode;
 import org.hibernate.MappingException;
+import org.hibernate.annotations.CacheLayout;
 import org.hibernate.boot.registry.classloading.spi.ClassLoaderService;
 import org.hibernate.boot.spi.MetadataBuildingContext;
 import org.hibernate.boot.spi.MetadataImplementor;
@@ -27,7 +27,7 @@ import org.hibernate.engine.spi.ExecuteUpdateResultCheckStyle;
 import org.hibernate.engine.spi.Mapping;
 import org.hibernate.internal.FilterConfiguration;
 import org.hibernate.internal.util.StringHelper;
-import org.hibernate.internal.util.collections.ArrayHelper;
+import org.hibernate.jdbc.Expectation;
 import org.hibernate.persister.collection.CollectionPersister;
 import org.hibernate.resource.beans.spi.ManagedBean;
 import org.hibernate.service.ServiceRegistry;
@@ -35,6 +35,9 @@ import org.hibernate.type.CollectionType;
 import org.hibernate.type.CustomCollectionType;
 import org.hibernate.type.Type;
 import org.hibernate.usertype.UserCollectionType;
+
+import static org.hibernate.internal.util.collections.ArrayHelper.EMPTY_BOOLEAN_ARRAY;
+import static org.hibernate.engine.spi.ExecuteUpdateResultCheckStyle.expectationConstructor;
 
 /**
  * A mapping model object representing a collection. Subclasses specialize to particular kinds of collection.
@@ -60,6 +63,7 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 	private boolean subselectLoadable;
 	private String cacheConcurrencyStrategy;
 	private String cacheRegionName;
+	private CacheLayout queryCacheLayout;
 	private String orderBy;
 	private String where;
 	private String manyToManyWhere;
@@ -102,6 +106,11 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 	private Column softDeleteColumn;
 
 	private String loaderName;
+
+	private Supplier<? extends Expectation> insertExpectation;
+	private Supplier<? extends Expectation> updateExpectation;
+	private Supplier<? extends Expectation> deleteExpectation;
+	private Supplier<? extends Expectation> deleteAllExpectation;
 
 	/**
 	 * hbm.xml binding
@@ -169,6 +178,10 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 		this.customSQLDeleteAll = original.customSQLDeleteAll;
 		this.customDeleteAllCallable = original.customDeleteAllCallable;
 		this.deleteAllCheckStyle = original.deleteAllCheckStyle;
+		this.insertExpectation = original.insertExpectation;
+		this.updateExpectation = original.updateExpectation;
+		this.deleteExpectation = original.deleteExpectation;
+		this.deleteAllExpectation = original.deleteAllExpectation;
 		this.loaderName = original.loaderName;
 	}
 
@@ -223,7 +236,7 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 			try {
 				final ClassLoaderService classLoaderService = getMetadata().getMetadataBuildingOptions()
 						.getServiceRegistry()
-						.getService( ClassLoaderService.class );
+						.requireService( ClassLoaderService.class );
 				setComparator( (Comparator<?>) classLoaderService.classForName( comparatorClassName ).getConstructor().newInstance() );
 			}
 			catch (Exception e) {
@@ -350,8 +363,8 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 		return batchSize;
 	}
 
-	public void setBatchSize(int i) {
-		batchSize = i;
+	public void setBatchSize(int batchSize) {
+		this.batchSize = batchSize;
 	}
 
 	public FetchMode getFetchMode() {
@@ -498,7 +511,7 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 	}
 
 	@Override
-	public void createUniqueKey() {
+	public void createUniqueKey(MetadataBuildingContext context) {
 	}
 
 	public boolean isSimpleValue() {
@@ -568,11 +581,19 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 		this.cacheRegionName = StringHelper.nullIfEmpty( cacheRegionName );
 	}
 
+	public CacheLayout getQueryCacheLayout() {
+		return queryCacheLayout;
+	}
+
+	public void setQueryCacheLayout(CacheLayout queryCacheLayout) {
+		this.queryCacheLayout = queryCacheLayout;
+	}
 
 	public void setCustomSQLInsert(String customSQLInsert, boolean callable, ExecuteUpdateResultCheckStyle checkStyle) {
 		this.customSQLInsert = customSQLInsert;
 		this.customInsertCallable = callable;
 		this.insertCheckStyle = checkStyle;
+		this.insertExpectation = expectationConstructor( checkStyle );
 	}
 
 	public String getCustomSQLInsert() {
@@ -583,6 +604,10 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 		return customInsertCallable;
 	}
 
+	/**
+	 * @deprecated use {@link #getInsertExpectation()}
+	 */
+	@Deprecated(since = "6.5", forRemoval = true)
 	public ExecuteUpdateResultCheckStyle getCustomSQLInsertCheckStyle() {
 		return insertCheckStyle;
 	}
@@ -591,6 +616,7 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 		this.customSQLUpdate = customSQLUpdate;
 		this.customUpdateCallable = callable;
 		this.updateCheckStyle = checkStyle;
+		this.updateExpectation = expectationConstructor( checkStyle );
 	}
 
 	public String getCustomSQLUpdate() {
@@ -601,6 +627,10 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 		return customUpdateCallable;
 	}
 
+	/**
+	 * @deprecated use {@link #getUpdateExpectation()}
+	 */
+	@Deprecated(since = "6.5", forRemoval = true)
 	public ExecuteUpdateResultCheckStyle getCustomSQLUpdateCheckStyle() {
 		return updateCheckStyle;
 	}
@@ -609,6 +639,7 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 		this.customSQLDelete = customSQLDelete;
 		this.customDeleteCallable = callable;
 		this.deleteCheckStyle = checkStyle;
+		this.deleteExpectation = expectationConstructor( checkStyle );
 	}
 
 	public String getCustomSQLDelete() {
@@ -619,6 +650,10 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 		return customDeleteCallable;
 	}
 
+	/**
+	 * @deprecated use {@link #getDeleteExpectation()}
+	 */
+	@Deprecated(since = "6.5", forRemoval = true)
 	public ExecuteUpdateResultCheckStyle getCustomSQLDeleteCheckStyle() {
 		return deleteCheckStyle;
 	}
@@ -630,6 +665,7 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 		this.customSQLDeleteAll = customSQLDeleteAll;
 		this.customDeleteAllCallable = callable;
 		this.deleteAllCheckStyle = checkStyle;
+		this.deleteAllExpectation = expectationConstructor( checkStyle );
 	}
 
 	public String getCustomSQLDeleteAll() {
@@ -746,19 +782,19 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 	}
 
 	@SuppressWarnings("rawtypes")
-	public void setTypeParameters(java.util.Map parameterMap) {
-		if ( parameterMap instanceof Properties ) {
-			this.typeParameters = (Properties) parameterMap;
+	public void setTypeParameters(java.util.Map typeParameters) {
+		if ( typeParameters instanceof Properties ) {
+			this.typeParameters = (Properties) typeParameters;
 		}
 		else {
 			this.typeParameters = new Properties();
-			typeParameters.putAll( parameterMap );
+			this.typeParameters.putAll( typeParameters );
 		}
 	}
 
 	@Override
 	public boolean[] getColumnInsertability() {
-		return ArrayHelper.EMPTY_BOOLEAN_ARRAY;
+		return EMPTY_BOOLEAN_ARRAY;
 	}
 
 	@Override
@@ -768,7 +804,7 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 
 	@Override
 	public boolean[] getColumnUpdateability() {
-		return ArrayHelper.EMPTY_BOOLEAN_ARRAY;
+		return EMPTY_BOOLEAN_ARRAY;
 	}
 
 	@Override
@@ -838,5 +874,37 @@ public abstract class Collection implements Fetchable, Value, Filterable, SoftDe
 	@Override
 	public Column getSoftDeleteColumn() {
 		return softDeleteColumn;
+	}
+
+	public Supplier<? extends Expectation> getInsertExpectation() {
+		return insertExpectation;
+	}
+
+	public void setInsertExpectation(Supplier<? extends Expectation> insertExpectation) {
+		this.insertExpectation = insertExpectation;
+	}
+
+	public Supplier<? extends Expectation> getUpdateExpectation() {
+		return updateExpectation;
+	}
+
+	public void setUpdateExpectation(Supplier<? extends Expectation> updateExpectation) {
+		this.updateExpectation = updateExpectation;
+	}
+
+	public Supplier<? extends Expectation> getDeleteExpectation() {
+		return deleteExpectation;
+	}
+
+	public void setDeleteExpectation(Supplier<? extends Expectation> deleteExpectation) {
+		this.deleteExpectation = deleteExpectation;
+	}
+
+	public Supplier<? extends Expectation> getDeleteAllExpectation() {
+		return deleteAllExpectation;
+	}
+
+	public void setDeleteAllExpectation(Supplier<? extends Expectation> deleteAllExpectation) {
+		this.deleteAllExpectation = deleteAllExpectation;
 	}
 }

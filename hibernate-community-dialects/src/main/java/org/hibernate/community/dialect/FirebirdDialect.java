@@ -28,7 +28,7 @@ import org.hibernate.boot.model.FunctionContributions;
 import org.hibernate.boot.model.TypeContributions;
 import org.hibernate.boot.model.relational.SqlStringGenerationContext;
 import org.hibernate.community.dialect.identity.FirebirdIdentityColumnSupport;
-import org.hibernate.community.dialect.pagination.SkipFirstLimitHandler;
+import org.hibernate.community.dialect.pagination.FirstSkipLimitHandler;
 import org.hibernate.community.dialect.sequence.FirebirdSequenceSupport;
 import org.hibernate.community.dialect.sequence.InterbaseSequenceSupport;
 import org.hibernate.community.dialect.sequence.SequenceInformationExtractorFirebirdDatabaseImpl;
@@ -116,13 +116,15 @@ import static org.hibernate.type.descriptor.DateTimeUtils.appendAsTimestampWithM
  */
 public class FirebirdDialect extends Dialect {
 
+	private static final DatabaseVersion DEFAULT_VERSION = DatabaseVersion.make( 2, 5 );
+
 	@SuppressWarnings("unused")
 	public FirebirdDialect() {
-		this( DatabaseVersion.make( 2, 5 ) );
+		this( DEFAULT_VERSION );
 	}
 
 	public FirebirdDialect(DialectResolutionInfo info) {
-		this( info.makeCopy() );
+		this( info.makeCopyOrDefault( DEFAULT_VERSION ) );
 		registerKeywords( info );
 	}
 
@@ -671,7 +673,7 @@ public class FirebirdDialect extends Dialect {
 	@Override
 	public LimitHandler getLimitHandler() {
 		return getVersion().isBefore( 3, 0 )
-				? SkipFirstLimitHandler.INSTANCE
+				? FirstSkipLimitHandler.INSTANCE
 				: OffsetFetchLimitHandler.INSTANCE;
 	}
 

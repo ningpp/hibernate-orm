@@ -18,6 +18,7 @@ import org.hibernate.id.enhanced.ImplicitDatabaseObjectNamingStrategy;
 import org.hibernate.id.enhanced.StandardOptimizerDescriptor;
 import org.hibernate.metamodel.CollectionClassification;
 import org.hibernate.type.WrapperArrayHandling;
+import org.hibernate.type.descriptor.jdbc.JavaTimeJdbcType;
 import org.hibernate.type.format.FormatMapper;
 
 import jakarta.persistence.Column;
@@ -207,7 +208,8 @@ public interface MappingSettings {
 	 * {@link org.hibernate.annotations.JdbcTypeCode}, and friends.
 	 * <p>
 	 * Can also specify the name of the {@link org.hibernate.type.SqlTypes} constant
-	 * field, for example, {@code hibernate.type.preferred_instant_jdbc_type=TIMESTAMP}.
+	 * field, for example, {@code hibernate.type.preferred_instant_jdbc_type=TIMESTAMP}
+	 * or {@code hibernate.type.preferred_instant_jdbc_type=INSTANT}.
 	 *
 	 * @settingDefault {@link org.hibernate.type.SqlTypes#TIMESTAMP_UTC}.
 	 *
@@ -215,6 +217,62 @@ public interface MappingSettings {
 	 */
 	@Incubating
 	String PREFERRED_INSTANT_JDBC_TYPE = "hibernate.type.preferred_instant_jdbc_type";
+
+	/**
+	 * Indicates whether to use {@linkplain java.time Java Time} references at the JDBC
+	 * boundary for binding and extracting temporal values to/from the database using
+	 * the support added in JDBC 4.2 via {@linkplain java.sql.PreparedStatement#setObject(int, Object, int)}
+	 * and {@linkplain java.sql.ResultSet#getObject(int, Class)}.
+	 * <p/>
+	 * Used to set the value across the entire system as opposed to scattered, individual
+	 * {@linkplain org.hibernate.annotations.JdbcTypeCode} and {@linkplain org.hibernate.annotations.JdbcType}
+	 * naming specific {@linkplain JavaTimeJdbcType} implementations.
+	 *
+	 * @implNote JDBC 4.2 does not define support for {@linkplain java.time.Instant}, so
+	 * {@linkplain java.time.Instant} is not included in this.  Some drivers do implement support for this
+	 * even though not explicitly part of the JDBC specification.  To use direct binding and extracting of
+	 * {@linkplain java.time.Instant} references, use {@code hibernate.type.preferred_instant_jdbc_type=INSTANT}.
+	 * See {@linkplain #PREFERRED_INSTANT_JDBC_TYPE}, {@linkplain org.hibernate.type.SqlTypes#INSTANT} and
+	 * {@linkplain org.hibernate.type.descriptor.jdbc.InstantJdbcType}.
+	 *
+	 * @settingDefault false
+	 *
+	 * @since 6.5
+	 */
+	@Incubating
+	String JAVA_TIME_USE_DIRECT_JDBC = "hibernate.type.java_time_use_direct_jdbc";
+
+	/**
+	 * Indicates whether to prefer using SQL enums and the respective special JDBC types for binding/extracting
+	 * of values.
+	 * <p/>
+	 * Used to set the value across the entire system as opposed to scattered, individual
+	 * {@linkplain org.hibernate.annotations.JdbcTypeCode} and {@linkplain org.hibernate.annotations.JdbcType}
+	 * naming specific {@linkplain org.hibernate.type.descriptor.jdbc.JdbcType} implementations.
+	 *
+	 * @settingDefault false
+	 *
+	 * @since 6.5
+	 */
+	@Incubating
+	String PREFER_NATIVE_ENUM_TYPES = "hibernate.type.prefer_native_enum_types";
+
+	/**
+	 * Specifies the preferred JDBC type for storing plural i.e. array/collection values.
+	 * <p>
+	 * Can be overridden locally using {@link org.hibernate.annotations.JdbcType},
+	 * {@link org.hibernate.annotations.JdbcTypeCode}, and friends.
+	 * <p>
+	 * Can also specify the name of the {@link org.hibernate.type.SqlTypes} constant
+	 * field, for example, {@code hibernate.type.preferred_array_jdbc_type=ARRAY}
+	 * or {@code hibernate.type.preferred_array_jdbc_type=TABLE}.
+	 *
+	 * @settingDefault {@link Dialect#getPreferredSqlTypeCodeForArray()}.
+	 *
+	 * @since 6.6
+	 */
+	@Incubating
+	String PREFERRED_ARRAY_JDBC_TYPE = "hibernate.type.preferred_array_jdbc_type";
 
 	/**
 	 * Specifies a {@link org.hibernate.type.format.FormatMapper} used for JSON

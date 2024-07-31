@@ -29,8 +29,10 @@ import org.hibernate.metamodel.mapping.BasicValuedMapping;
 import org.hibernate.metamodel.mapping.MappingModelExpressible;
 import org.hibernate.metamodel.model.domain.BasicDomainType;
 import org.hibernate.metamodel.model.domain.internal.BasicSqmPathSource;
+import org.hibernate.persister.entity.EntityPersister;
 import org.hibernate.query.ReturnableType;
 import org.hibernate.query.sqm.produce.function.FunctionReturnTypeResolver;
+import org.hibernate.query.sqm.sql.SqmToSqlAstConverter;
 import org.hibernate.query.sqm.tree.SqmTypedNode;
 import org.hibernate.sql.ast.tree.SqlAstNode;
 import org.hibernate.testing.orm.junit.BootstrapServiceRegistry;
@@ -39,11 +41,15 @@ import org.hibernate.testing.orm.junit.SessionFactory;
 import org.hibernate.testing.orm.junit.SessionFactoryScope;
 import org.hibernate.type.CustomType;
 import org.hibernate.type.spi.TypeConfiguration;
+import org.hibernate.usertype.DynamicParameterizedType;
+import org.hibernate.usertype.UserType;
 import org.junit.jupiter.api.Test;
 
 import java.util.Date;
 import java.util.List;
 import java.util.function.Supplier;
+
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -51,9 +57,10 @@ import static org.junit.jupiter.api.Assertions.*;
  * @author Daniel Gredler
  * @author Jan-Willem Gmelig Meyling
  * @author Sayra Ranjha
+ * @author Yanming Zhou
  */
 @DomainModel(
-		annotatedClasses = { AbstractEntity.class, Entity1.class, Entity2.class }
+		annotatedClasses = { AbstractEntity.class, Entity1.class, Entity2.class, Entity3.class }
 )
 @SessionFactory
 @BootstrapServiceRegistry(
@@ -107,6 +114,22 @@ public class DynamicParameterizedTypeTest {
 		});
 	}
 
+	@Test
+	public void testGetReturnedJavaType(SessionFactoryScope scope) {
+		scope.inTransaction(session -> {
+			EntityPersister persister = session.getEntityPersister("Entity3", new Entity3());
+			CustomType<?> mapping = (CustomType<?>) persister.findAttributeMapping("attributes").getSingleJdbcMapping();
+			UserType<?> userType = mapping.getUserType();
+			assertTrue(userType instanceof MyGenericType);
+			DynamicParameterizedType.ParameterType parameterType = ((MyGenericType) userType).getParameterType();
+			try {
+				assertEquals(parameterType.getReturnedJavaType(), Entity3.class.getDeclaredField("attributes").getGenericType());
+			} catch (NoSuchFieldException e) {
+				throw new RuntimeException(e);
+			}
+		});
+	}
+
 
 	public static class FunctionContributorImpl implements FunctionContributor {
 		@Override
@@ -117,15 +140,7 @@ public class DynamicParameterizedTypeTest {
 						@Override
 						public ReturnableType<?> resolveFunctionReturnType(
 								ReturnableType<?> impliedType,
-								List<? extends SqmTypedNode<?>> arguments,
-								TypeConfiguration typeConfiguration) {
-							return resolveFunctionReturnType( impliedType, null, arguments, typeConfiguration );
-						}
-
-						@Override
-						public ReturnableType<?> resolveFunctionReturnType(
-								ReturnableType<?> impliedType,
-								Supplier<MappingModelExpressible<?>> inferredTypeSupplier,
+								@Nullable SqmToSqlAstConverter converter,
 								List<? extends SqmTypedNode<?>> arguments,
 								TypeConfiguration typeConfiguration) {
 							SqmTypedNode<?> sqmTypedNode = arguments.get(0);

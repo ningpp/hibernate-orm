@@ -6,6 +6,7 @@
  */
 package org.hibernate.internal;
 
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -24,6 +25,7 @@ import org.hibernate.engine.jdbc.connections.spi.MultiTenantConnectionProvider;
 import org.hibernate.engine.jdbc.mutation.spi.MutationExecutorService;
 import org.hibernate.engine.jdbc.spi.JdbcServices;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
+import org.hibernate.event.internal.EmptyEventManager;
 import org.hibernate.event.service.spi.EventListenerGroup;
 import org.hibernate.event.service.spi.EventListenerRegistry;
 import org.hibernate.event.spi.AutoFlushEventListener;
@@ -31,6 +33,7 @@ import org.hibernate.event.spi.ClearEventListener;
 import org.hibernate.event.spi.DeleteEventListener;
 import org.hibernate.event.spi.DirtyCheckEventListener;
 import org.hibernate.event.spi.EntityCopyObserverFactory;
+import org.hibernate.event.spi.EventManager;
 import org.hibernate.event.spi.EventType;
 import org.hibernate.event.spi.EvictEventListener;
 import org.hibernate.event.spi.FlushEntityEventListener;
@@ -48,6 +51,7 @@ import org.hibernate.event.spi.PostInsertEventListener;
 import org.hibernate.event.spi.PostLoadEvent;
 import org.hibernate.event.spi.PostLoadEventListener;
 import org.hibernate.event.spi.PostUpdateEventListener;
+import org.hibernate.event.spi.PostUpsertEventListener;
 import org.hibernate.event.spi.PreCollectionRecreateEventListener;
 import org.hibernate.event.spi.PreCollectionRemoveEventListener;
 import org.hibernate.event.spi.PreCollectionUpdateEventListener;
@@ -55,6 +59,7 @@ import org.hibernate.event.spi.PreDeleteEventListener;
 import org.hibernate.event.spi.PreInsertEventListener;
 import org.hibernate.event.spi.PreLoadEventListener;
 import org.hibernate.event.spi.PreUpdateEventListener;
+import org.hibernate.event.spi.PreUpsertEventListener;
 import org.hibernate.event.spi.RefreshEventListener;
 import org.hibernate.event.spi.ReplicateEventListener;
 import org.hibernate.event.spi.ResolveNaturalIdEventListener;
@@ -137,6 +142,7 @@ public final class FastSessionServices {
 	public final EventListenerGroup<PostLoadEventListener> eventListenerGroup_POST_LOAD; //Frequently used by 2LC initialization:
 	public final EventListenerGroup<PostUpdateEventListener> eventListenerGroup_POST_COMMIT_UPDATE;
 	public final EventListenerGroup<PostUpdateEventListener> eventListenerGroup_POST_UPDATE;
+	public final EventListenerGroup<PostUpsertEventListener> eventListenerGroup_POST_UPSERT;
 	public final EventListenerGroup<PreCollectionRecreateEventListener> eventListenerGroup_PRE_COLLECTION_RECREATE;
 	public final EventListenerGroup<PreCollectionRemoveEventListener> eventListenerGroup_PRE_COLLECTION_REMOVE;
 	public final EventListenerGroup<PreCollectionUpdateEventListener> eventListenerGroup_PRE_COLLECTION_UPDATE;
@@ -144,6 +150,7 @@ public final class FastSessionServices {
 	public final EventListenerGroup<PreInsertEventListener> eventListenerGroup_PRE_INSERT;
 	public final EventListenerGroup<PreLoadEventListener> eventListenerGroup_PRE_LOAD;
 	public final EventListenerGroup<PreUpdateEventListener> eventListenerGroup_PRE_UPDATE;
+	public final EventListenerGroup<PreUpsertEventListener> eventListenerGroup_PRE_UPSERT;
 	public final EventListenerGroup<RefreshEventListener> eventListenerGroup_REFRESH;
 	public final EventListenerGroup<ReplicateEventListener> eventListenerGroup_REPLICATE;
 	public final EventListenerGroup<ResolveNaturalIdEventListener> eventListenerGroup_RESOLVE_NATURAL_ID;
@@ -184,6 +191,7 @@ public final class FastSessionServices {
 	private final FormatMapper xmlFormatMapper;
 	private final MutationExecutorService mutationExecutorService;
 	private final JdbcValuesMappingProducerProvider jdbcValuesMappingProducerProvider;
+	private final EventManager eventManager;
 
 	FastSessionServices(SessionFactoryImplementor sessionFactory) {
 		Objects.requireNonNull( sessionFactory );
@@ -192,7 +200,7 @@ public final class FastSessionServices {
 		final SessionFactoryOptions sessionFactoryOptions = sessionFactory.getSessionFactoryOptions();
 
 		// Pre-compute all iterators on Event listeners:
-		final EventListenerRegistry eventListenerRegistry = serviceRegistry.getService( EventListenerRegistry.class );
+		final EventListenerRegistry eventListenerRegistry = serviceRegistry.requireService( EventListenerRegistry.class );
 		this.eventListenerGroup_AUTO_FLUSH = listeners( eventListenerRegistry, EventType.AUTO_FLUSH );
 		this.eventListenerGroup_CLEAR = listeners( eventListenerRegistry, EventType.CLEAR );
 		this.eventListenerGroup_DELETE = listeners( eventListenerRegistry, EventType.DELETE );
@@ -216,6 +224,7 @@ public final class FastSessionServices {
 		this.eventListenerGroup_POST_INSERT = listeners( eventListenerRegistry, EventType.POST_INSERT );
 		this.eventListenerGroup_POST_LOAD = listeners( eventListenerRegistry, EventType.POST_LOAD );
 		this.eventListenerGroup_POST_UPDATE = listeners( eventListenerRegistry, EventType.POST_UPDATE );
+		this.eventListenerGroup_POST_UPSERT = listeners( eventListenerRegistry, EventType.POST_UPSERT );
 		this.eventListenerGroup_PRE_COLLECTION_RECREATE = listeners( eventListenerRegistry, EventType.PRE_COLLECTION_RECREATE );
 		this.eventListenerGroup_PRE_COLLECTION_REMOVE = listeners( eventListenerRegistry, EventType.PRE_COLLECTION_REMOVE );
 		this.eventListenerGroup_PRE_COLLECTION_UPDATE = listeners( eventListenerRegistry, EventType.PRE_COLLECTION_UPDATE );
@@ -223,6 +232,7 @@ public final class FastSessionServices {
 		this.eventListenerGroup_PRE_INSERT = listeners( eventListenerRegistry, EventType.PRE_INSERT );
 		this.eventListenerGroup_PRE_LOAD = listeners( eventListenerRegistry, EventType.PRE_LOAD );
 		this.eventListenerGroup_PRE_UPDATE = listeners( eventListenerRegistry, EventType.PRE_UPDATE );
+		this.eventListenerGroup_PRE_UPSERT = listeners( eventListenerRegistry, EventType.PRE_UPSERT );
 		this.eventListenerGroup_REFRESH = listeners( eventListenerRegistry, EventType.REFRESH );
 		this.eventListenerGroup_REPLICATE = listeners( eventListenerRegistry, EventType.REPLICATE );
 		this.eventListenerGroup_RESOLVE_NATURAL_ID = listeners( eventListenerRegistry, EventType.RESOLVE_NATURAL_ID );
@@ -246,12 +256,12 @@ public final class FastSessionServices {
 				? null
 				: serviceRegistry.getService( ConnectionProvider.class );
 		this.multiTenantConnectionProvider = requiresMultiTenantConnectionProvider
-				? serviceRegistry.getService( MultiTenantConnectionProvider.class )
+				? serviceRegistry.requireService( MultiTenantConnectionProvider.class )
 				: null;
-		this.classLoaderService = serviceRegistry.getService( ClassLoaderService.class );
+		this.classLoaderService = serviceRegistry.requireService( ClassLoaderService.class );
 		this.transactionCoordinatorBuilder = serviceRegistry.getService( TransactionCoordinatorBuilder.class );
-		this.jdbcServices = serviceRegistry.getService( JdbcServices.class );
-		this.entityCopyObserverFactory = serviceRegistry.getService( EntityCopyObserverFactory.class );
+		this.jdbcServices = serviceRegistry.requireService( JdbcServices.class );
+		this.entityCopyObserverFactory = serviceRegistry.requireService( EntityCopyObserverFactory.class );
 		this.jdbcValuesMappingProducerProvider = serviceRegistry.getService( JdbcValuesMappingProducerProvider.class );
 
 
@@ -269,6 +279,10 @@ public final class FastSessionServices {
 		this.jsonFormatMapper = sessionFactoryOptions.getJsonFormatMapper();
 		this.xmlFormatMapper = sessionFactoryOptions.getXmlFormatMapper();
 		this.batchBuilder = serviceRegistry.getService( BatchBuilder.class );
+		final Collection<EventManager> eventManagers = classLoaderService.loadJavaServices( EventManager.class );
+		this.eventManager = eventManagers.isEmpty()
+				? new EmptyEventManager()
+				: eventManagers.iterator().next();
 	}
 
 	private static FlushMode initializeDefaultFlushMode(Map<String, Object> defaultSessionProperties) {
@@ -377,6 +391,10 @@ public final class FastSessionServices {
 		return this.jdbcValuesMappingProducerProvider;
 	}
 
+	public EventManager getEventManager() {
+		return eventManager;
+	}
+
 	public boolean useStreamForLobBinding() {
 		return useStreamForLobBinding;
 	}
@@ -389,6 +407,7 @@ public final class FastSessionServices {
 		return preferredSqlTypeCodeForBoolean;
 	}
 
+	@Deprecated(forRemoval = true) //This seems no longer used - cleanup?
 	public TimeZoneStorageStrategy getDefaultTimeZoneStorageStrategy() {
 		return defaultTimeZoneStorageStrategy;
 	}
@@ -411,7 +430,7 @@ public final class FastSessionServices {
 		return xmlFormatMapper;
 	}
 
-	@Deprecated //This seems no longer used - cleanup?
+	@Deprecated(forRemoval = true) //This seems no longer used - cleanup?
 	public MutationExecutorService getMutationExecutorService() {
 		return mutationExecutorService;
 	}

@@ -44,7 +44,6 @@ import org.hibernate.boot.spi.MetadataBuildingContext;
 import org.hibernate.boot.spi.PropertyData;
 import org.hibernate.dialect.DatabaseVersion;
 import org.hibernate.dialect.Dialect;
-import org.hibernate.internal.util.StringHelper;
 import org.hibernate.mapping.Any;
 import org.hibernate.mapping.AttributeContainer;
 import org.hibernate.mapping.BasicValue;
@@ -62,12 +61,16 @@ import org.hibernate.mapping.ToOne;
 import org.hibernate.mapping.Value;
 import org.hibernate.type.descriptor.java.JavaType;
 
+import jakarta.persistence.ConstraintMode;
 import jakarta.persistence.Embeddable;
 import jakarta.persistence.EmbeddedId;
 import jakarta.persistence.FetchType;
+import jakarta.persistence.ForeignKey;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToOne;
 
+import static jakarta.persistence.ConstraintMode.NO_CONSTRAINT;
+import static jakarta.persistence.ConstraintMode.PROVIDER_DEFAULT;
 import static org.hibernate.boot.model.internal.AnnotatedColumn.buildColumnOrFormulaFromAnnotation;
 import static org.hibernate.boot.model.internal.HCANNHelper.findAnnotation;
 import static org.hibernate.internal.util.StringHelper.isEmpty;
@@ -347,7 +350,7 @@ public class BinderHelper {
 		else {
 			ownerEntity.addProperty( result );
 		}
-		embeddedComponent.createUniqueKey(); //make it unique
+		embeddedComponent.createUniqueKey( context ); //make it unique
 		return result;
 	}
 
@@ -448,9 +451,16 @@ public class BinderHelper {
 		// which are mapped to that column. (There might be multiple such
 		// properties for each column.)
 		if ( columnOwner instanceof PersistentClass ) {
-			PersistentClass persistentClass = (PersistentClass) columnOwner;
+			final PersistentClass persistentClass = (PersistentClass) columnOwner;
+			// Process ToOne associations after Components, Basic and Id properties
+			final List<Property> toOneProperties = new ArrayList<>();
 			for ( Property property : persistentClass.getReferenceableProperties() ) {
-				matchColumnsByProperty( property, columnsToProperty );
+				if ( property.getValue() instanceof ToOne ) {
+					toOneProperties.add( property );
+				}
+				else {
+					matchColumnsByProperty( property, columnsToProperty );
+				}
 			}
 			if ( persistentClass.hasIdentifierProperty() ) {
 				matchColumnsByProperty( persistentClass.getIdentifierProperty(), columnsToProperty );
@@ -461,6 +471,9 @@ public class BinderHelper {
 				for ( Property p : key.getProperties() ) {
 					matchColumnsByProperty( p, columnsToProperty );
 				}
+			}
+			for ( Property property : toOneProperties ) {
+				matchColumnsByProperty( property, columnsToProperty );
 			}
 		}
 		else {
@@ -761,6 +774,7 @@ public class BinderHelper {
 		final AnnotatedColumns discriminatorColumns = buildColumnOrFormulaFromAnnotation(
 				discriminatorColumn,
 				discriminatorFormula,
+				null,
 //				null,
 				nullability,
 				propertyHolder,
@@ -873,14 +887,16 @@ public class BinderHelper {
 					.toXClass( propertyHolder.getPersistentClass().getMappedClass() );
 		final InFlightMetadataCollector metadataCollector = buildingContext.getMetadataCollector();
 		if ( propertyHolder.isInIdClass() ) {
-			final PropertyData propertyData = metadataCollector.getPropertyAnnotatedWithIdAndToOne( mappedClass, propertyName );
-			return propertyData == null && buildingContext.getBuildingOptions().isSpecjProprietarySyntaxEnabled()
-					? metadataCollector.getPropertyAnnotatedWithMapsId( mappedClass, propertyName )
-					: propertyData;
+			final PropertyData data = metadataCollector.getPropertyAnnotatedWithIdAndToOne( mappedClass, propertyName );
+			if ( data != null ) {
+				return data;
+			}
+			// TODO: is this branch even necessary?
+			else if ( buildingContext.getBuildingOptions().isSpecjProprietarySyntaxEnabled() ) {
+				return metadataCollector.getPropertyAnnotatedWithMapsId( mappedClass, propertyName );
+			}
 		}
-		else {
-			return metadataCollector.getPropertyAnnotatedWithMapsId( mappedClass, isId ? "" : propertyName );
-		}
+		return metadataCollector.getPropertyAnnotatedWithMapsId( mappedClass, isId ? "" : propertyName );
 	}
 
 	public static Map<String,String> toAliasTableMap(SqlFragmentAlias[] aliases){
@@ -916,21 +932,16 @@ public class BinderHelper {
 		final Iterator<Annotation> annotations =
 				Arrays.stream( element.getAnnotations() )
 						.flatMap( annotation -> {
-							try {
-								final Method value = annotation.annotationType().getDeclaredMethod("value");
-								final Class<?> returnType = value.getReturnType();
-								if ( returnType.isArray()
-										&& returnType.getComponentType().isAnnotationPresent(Repeatable.class)
-										&& returnType.getComponentType().isAnnotationPresent(DialectOverride.OverridesAnnotation.class) ) {
-									return Stream.of( (Annotation[]) value.invoke(annotation) );
+								final Method valueExtractor = isRepeableAndDialectOverride( annotation );
+								if ( valueExtractor != null ) {
+									try {
+										return Stream.of( (Annotation[]) valueExtractor.invoke( annotation ) );
+									}
+									catch (Exception e) {
+										throw new AssertionFailure("could not read @DialectOverride annotation", e);
+									}
 								}
-							}
-							catch (NoSuchMethodException ignored) {
-							}
-							catch (Exception e) {
-								throw new AssertionFailure("could not read @DialectOverride annotation", e);
-							}
-							return Stream.of(annotation);
+							return Stream.of( annotation );
 						} ).iterator();
 		while ( annotations.hasNext() ) {
 			final Annotation annotation = annotations.next();
@@ -962,6 +973,47 @@ public class BinderHelper {
 			}
 		}
 		return element.getAnnotation( annotationType );
+	}
+
+	//Wondering: should we make this cache non-static and store in the metadata context so that we can clear it after bootstrap?
+	//(not doing it now as it would make the patch more invasive - and there might be drawbacks to consider, such as
+	//needing to re-initialize this cache again during hot-reload scenarios: it might be nice to be able to plug the
+	//cache, so that runtimes can choose the most fitting strategy)
+	private static final ClassValue<AnnotationCacheValue> annotationMetaCacheForRepeatableDialectOverride = new ClassValue() {
+		@Override
+		protected Object computeValue(final Class type) {
+			final Method valueMethod;
+			try {
+				valueMethod = type.getDeclaredMethod( "value" );
+			}
+			catch ( NoSuchMethodException e ) {
+				return NOT_REPEATABLE;
+			}
+			final Class<?> returnType = valueMethod.getReturnType();
+			if ( returnType.isArray()
+					&& returnType.getComponentType().isAnnotationPresent( Repeatable.class )
+					&& returnType.getComponentType().isAnnotationPresent( DialectOverride.OverridesAnnotation.class ) ) {
+				return new AnnotationCacheValue( valueMethod );
+			}
+			else {
+				return NOT_REPEATABLE;
+			}
+		}
+	};
+
+	private static final AnnotationCacheValue NOT_REPEATABLE = new AnnotationCacheValue( null );
+
+	private static class AnnotationCacheValue {
+		final Method valueMethod;
+		private AnnotationCacheValue(final Method valueMethod) {
+			//null is intentionally allowed: it means this annotations was NOT a Repeatable & DialectOverride.OverridesAnnotation annotation,
+			//which is also an information we want to cache (negative caching).
+			this.valueMethod = valueMethod;
+		}
+	}
+
+	private static Method isRepeableAndDialectOverride(final Annotation annotation) {
+		return annotationMetaCacheForRepeatableDialectOverride.get( annotation.annotationType() ).valueMethod;
 	}
 
 	public static FetchMode getFetchMode(FetchType fetch) {
@@ -1124,6 +1176,17 @@ public class BinderHelper {
 		return false;
 	}
 
+	public static boolean noConstraint(ForeignKey foreignKey, boolean noConstraintByDefault) {
+		if ( foreignKey == null ) {
+			return false;
+		}
+		else {
+			final ConstraintMode mode = foreignKey.value();
+			return mode == NO_CONSTRAINT
+					|| mode == PROVIDER_DEFAULT && noConstraintByDefault;
+		}
+	}
+
 	/**
 	 * Extract an annotation from the package-info for the package the given class is defined in
 	 *
@@ -1148,10 +1211,9 @@ public class BinderHelper {
 		final String declaringClassName = xClass.getName();
 		final String packageName = qualifier( declaringClassName );
 		if ( isNotEmpty( packageName ) ) {
-			final ClassLoaderService classLoaderService = context.getBootstrapContext()
-					.getServiceRegistry()
-					.getService( ClassLoaderService.class );
-			assert classLoaderService != null;
+			final ClassLoaderService classLoaderService =
+					context.getBootstrapContext().getServiceRegistry()
+							.requireService( ClassLoaderService.class );
 			final Package declaringClassPackage = classLoaderService.packageForNameOrNull( packageName );
 			if ( declaringClassPackage != null ) {
 				// will be null when there is no `package-info.class`

@@ -8,7 +8,6 @@ package org.hibernate.mapping;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 
 import org.hibernate.boot.spi.MetadataBuildingContext;
@@ -202,6 +201,11 @@ public class Subclass extends PersistentClass {
 	@Override
 	public boolean isExplicitPolymorphism() {
 		return getSuperclass().isExplicitPolymorphism();
+	}
+
+	@Override
+	public boolean isConcreteProxy() {
+		return getRootClass().isConcreteProxy();
 	}
 
 	public void setSuperclass(PersistentClass superclass) {

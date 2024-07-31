@@ -287,6 +287,27 @@ public interface JdbcType extends Serializable {
 		return isIntervalType( getDdlTypeCode() );
 	}
 
+	default boolean isDuration() {
+		final int ddlTypeCode = getDefaultSqlTypeCode();
+		return isDurationType( ddlTypeCode )
+			|| isIntervalType( ddlTypeCode );
+	}
+
+	default boolean isArray() {
+		return isArray( getDdlTypeCode() );
+	}
+
+	static boolean isArray(int jdbcTypeCode) {
+		switch ( jdbcTypeCode ) {
+			case ARRAY:
+			case STRUCT_ARRAY:
+			case JSON_ARRAY:
+			case XML_ARRAY:
+				return true;
+		}
+		return false;
+	}
+
 	default CastType getCastType() {
 		return getCastType( getDdlTypeCode() );
 	}
@@ -351,7 +372,11 @@ public interface JdbcType extends Serializable {
 		callableStatement.registerOutParameter( index, getJdbcTypeCode() );
 	}
 
+	/**
+	 * @deprecated Use {@link #addAuxiliaryDatabaseObjects(JavaType, Size, Database, JdbcTypeIndicators)} instead
+	 */
 	@Incubating
+	@Deprecated(forRemoval = true)
 	default void addAuxiliaryDatabaseObjects(
 			JavaType<?> javaType,
 			Size columnSize,
@@ -359,8 +384,68 @@ public interface JdbcType extends Serializable {
 			TypeConfiguration typeConfiguration) {
 	}
 
+	/**
+	 * Add auxiliary database objects for this {@linkplain JdbcType} to the {@link Database} object.
+	 *
+	 * @since 6.5
+	 */
+	@Incubating
+	default void addAuxiliaryDatabaseObjects(
+			JavaType<?> javaType,
+			Size columnSize,
+			Database database,
+			JdbcTypeIndicators context) {
+		addAuxiliaryDatabaseObjects( javaType, columnSize, database, context.getTypeConfiguration() );
+	}
+
 	@Incubating
 	default String getExtraCreateTableInfo(JavaType<?> javaType, String columnName, String tableName, Database database) {
 		return "";
+	}
+
+	@Incubating
+	default boolean isComparable() {
+		final int code = getDefaultSqlTypeCode();
+		return isCharacterType( code )
+			|| isTemporalType( code )
+			|| isNumericType( code )
+			|| isEnumType( code )
+			// both Java and the SQL database consider
+			// that false < true is a sensible thing
+			|| isBoolean()
+			// both Java and the database consider UUIDs
+			// comparable, so go ahead and accept them
+			|| code == UUID;
+	}
+
+	@Incubating
+	default boolean hasDatePart() {
+		return SqlTypes.hasDatePart( getDefaultSqlTypeCode() );
+	}
+
+	@Incubating
+	default boolean hasTimePart() {
+		return SqlTypes.hasTimePart( getDefaultSqlTypeCode() );
+	}
+
+	@Incubating
+	default boolean isStringLikeExcludingClob() {
+		final int code = getDefaultSqlTypeCode();
+		return isCharacterType( code ) || isEnumType( code );
+	}
+
+	@Incubating
+	default boolean isSpatial() {
+		return isSpatialType( getDefaultSqlTypeCode() );
+	}
+
+	@Incubating
+	default boolean isBoolean() {
+		return getDefaultSqlTypeCode() == BOOLEAN;
+	}
+
+	@Incubating
+	default boolean isSmallInteger() {
+		return isSmallOrTinyInt( getDefaultSqlTypeCode() );
 	}
 }

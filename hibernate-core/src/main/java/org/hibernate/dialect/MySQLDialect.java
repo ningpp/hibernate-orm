@@ -17,6 +17,7 @@ import java.util.Calendar;
 import java.util.Date;
 import java.util.TimeZone;
 
+import org.hibernate.Length;
 import org.hibernate.LockOptions;
 import org.hibernate.PessimisticLockException;
 import org.hibernate.boot.model.FunctionContributions;
@@ -39,6 +40,7 @@ import org.hibernate.engine.jdbc.env.spi.IdentifierHelper;
 import org.hibernate.engine.jdbc.env.spi.IdentifierHelperBuilder;
 import org.hibernate.engine.jdbc.env.spi.NameQualifierSupport;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
+import org.hibernate.exception.ConstraintViolationException;
 import org.hibernate.exception.LockAcquisitionException;
 import org.hibernate.exception.LockTimeoutException;
 import org.hibernate.exception.spi.SQLExceptionConversionDelegate;
@@ -70,12 +72,15 @@ import org.hibernate.type.NullType;
 import org.hibernate.type.SqlTypes;
 import org.hibernate.type.StandardBasicTypes;
 import org.hibernate.type.descriptor.java.JavaType;
+import org.hibernate.type.descriptor.jdbc.EnumJdbcType;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
 import org.hibernate.type.descriptor.jdbc.NullJdbcType;
+import org.hibernate.type.descriptor.jdbc.OrdinalEnumJdbcType;
 import org.hibernate.type.descriptor.jdbc.spi.JdbcTypeRegistry;
 import org.hibernate.type.descriptor.sql.internal.CapacityDependentDdlType;
 import org.hibernate.type.descriptor.sql.internal.DdlTypeImpl;
 import org.hibernate.type.descriptor.sql.internal.NativeEnumDdlTypeImpl;
+import org.hibernate.type.descriptor.sql.internal.NativeOrdinalEnumDdlTypeImpl;
 import org.hibernate.type.descriptor.sql.spi.DdlTypeRegistry;
 
 import jakarta.persistence.TemporalType;
@@ -148,6 +153,16 @@ public class MySQLDialect extends Dialect {
 					//we set scale > 20
 					size.setScale( Math.min( size.getPrecision(), 20 ) );
 					return size;
+				case BLOB:
+				case NCLOB:
+				case CLOB:
+					return super.resolveSize(
+							jdbcType,
+							javaType,
+							precision,
+							scale,
+							length == null ? getDefaultLobLength() : length
+					);
 				default:
 					return super.resolveSize( jdbcType, javaType, precision, scale, length );
 			}
@@ -183,11 +198,16 @@ public class MySQLDialect extends Dialect {
 	}
 
 	public MySQLDialect(DialectResolutionInfo info) {
-		this( createVersion( info ), MySQLServerConfiguration.fromDatabaseMetadata( info.getDatabaseMetadata() ) );
+		this( createVersion( info ), MySQLServerConfiguration.fromDialectResolutionInfo( info ) );
 		registerKeywords( info );
 	}
 
+	@Deprecated
 	protected static DatabaseVersion createVersion(DialectResolutionInfo info) {
+		return createVersion( info, MINIMUM_VERSION );
+	}
+
+	protected static DatabaseVersion createVersion(DialectResolutionInfo info, DatabaseVersion defaultVersion) {
 		final String versionString = info.getDatabaseVersion();
 		if ( versionString != null ) {
 			final String[] components = versionString.split( "\\." );
@@ -203,7 +223,7 @@ public class MySQLDialect extends Dialect {
 				}
 			}
 		}
-		return info.makeCopy();
+		return info.makeCopyOrDefault( defaultVersion );
 	}
 
 	@Override
@@ -417,7 +437,8 @@ public class MySQLDialect extends Dialect {
 						.build()
 		);
 
-		ddlTypeRegistry.addDescriptor( new NativeEnumDdlTypeImpl(this) );
+		ddlTypeRegistry.addDescriptor( new NativeEnumDdlTypeImpl( this ) );
+		ddlTypeRegistry.addDescriptor( new NativeOrdinalEnumDdlTypeImpl( this ) );
 	}
 
 	@Deprecated
@@ -514,8 +535,7 @@ public class MySQLDialect extends Dialect {
 
 	@Override
 	public long getDefaultLobLength() {
-		//max length for mediumblob or mediumtext
-		return 16_777_215;
+		return Length.LONG32;
 	}
 
 	@Override
@@ -541,6 +561,23 @@ public class MySQLDialect extends Dialect {
 				scale,
 				jdbcTypeRegistry
 		);
+	}
+
+	@Override
+	public int resolveSqlTypeLength(
+			String columnTypeName,
+			int jdbcTypeCode,
+			int precision,
+			int scale,
+			int displaySize) {
+		// It seems MariaDB/MySQL return the precision in bytes depending on the charset,
+		// so to detect whether we have a single character here, we check the display size
+		if ( jdbcTypeCode == Types.CHAR && precision <= 4 ) {
+			return displaySize;
+		}
+		else {
+			return precision;
+		}
 	}
 
 	@Override
@@ -671,7 +708,8 @@ public class MySQLDialect extends Dialect {
 				)
 		);
 
-		jdbcTypeRegistry.addDescriptor( new MySQLEnumJdbcType() );
+		jdbcTypeRegistry.addDescriptor( EnumJdbcType.INSTANCE );
+		jdbcTypeRegistry.addDescriptor( OrdinalEnumJdbcType.INSTANCE );
 	}
 
 	@Override
@@ -1200,6 +1238,16 @@ public class MySQLDialect extends Dialect {
 				case 1207:
 				case 1206:
 					return new LockAcquisitionException( message, sqlException, sql );
+				case 1062:
+					// Unique constraint violation
+					String constraintName = getViolatedConstraintNameExtractor().extractConstraintName(sqlException);
+					return new ConstraintViolationException(
+							message,
+							sqlException,
+							sql,
+							ConstraintViolationException.ConstraintKind.UNIQUE,
+							constraintName
+					);
 			}
 
 			final String sqlState = JdbcExceptionHelper.extractSqlState( sqlException );
@@ -1512,5 +1560,15 @@ public class MySQLDialect extends Dialect {
 	@Override
 	public String getEnableConstraintsStatement() {
 		return "set foreign_key_checks = 1";
+	}
+
+	@Override
+	public DmlTargetColumnQualifierSupport getDmlTargetColumnQualifierSupport() {
+		return DmlTargetColumnQualifierSupport.TABLE_ALIAS;
+	}
+
+	@Override
+	public boolean supportsFromClauseInUpdate() {
+		return true;
 	}
 }

@@ -177,6 +177,11 @@ public class AnonymousTupleBasicValuedModelPart implements OwnedValuedModelPart,
 	}
 
 	@Override
+	public Integer getTemporalPrecision() {
+		return null;
+	}
+
+	@Override
 	public MappingType getMappedType() {
 		return this;
 	}
@@ -213,7 +218,9 @@ public class AnonymousTupleBasicValuedModelPart implements OwnedValuedModelPart,
 				sqlSelection.getValuesArrayPosition(),
 				resultVariable,
 				jdbcMapping,
-				navigablePath
+				navigablePath,
+				false,
+				!sqlSelection.isVirtual()
 		);
 	}
 
@@ -265,7 +272,8 @@ public class AnonymousTupleBasicValuedModelPart implements OwnedValuedModelPart,
 				fetchablePath,
 				this,
 				fetchTiming,
-				creationState
+				creationState,
+				!sqlSelection.isVirtual()
 		);
 	}
 

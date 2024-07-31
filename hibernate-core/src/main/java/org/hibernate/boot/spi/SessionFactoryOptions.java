@@ -15,6 +15,7 @@ import org.hibernate.Incubating;
 import org.hibernate.Interceptor;
 import org.hibernate.SessionFactoryObserver;
 import org.hibernate.TimeZoneStorageStrategy;
+import org.hibernate.annotations.CacheLayout;
 import org.hibernate.boot.SchemaAutoTooling;
 import org.hibernate.boot.TempTableDdlTransactionHandling;
 import org.hibernate.boot.registry.StandardServiceRegistry;
@@ -166,6 +167,9 @@ public interface SessionFactoryOptions extends QueryEngineOptions {
 
 	boolean isQueryCacheEnabled();
 
+	@Incubating
+	CacheLayout getQueryCacheLayout();
+
 	TimestampsCacheFactory getTimestampsCacheFactory();
 
 	String getCacheRegionPrefix();
@@ -268,7 +272,18 @@ public interface SessionFactoryOptions extends QueryEngineOptions {
 		return null;
 	}
 
+	/**
+	 * @see org.hibernate.cfg.AvailableSettings#IN_CLAUSE_PARAMETER_PADDING
+	 */
 	default boolean inClauseParameterPaddingEnabled() {
+		return false;
+	}
+
+	/**
+	 * @see org.hibernate.cfg.AvailableSettings#PORTABLE_INTEGER_DIVISION
+	 */
+	@Override
+	default boolean isPortableIntegerDivisionEnabled() {
 		return false;
 	}
 
@@ -310,6 +325,8 @@ public interface SessionFactoryOptions extends QueryEngineOptions {
 		return false;
 	}
 
+	boolean isUnownedAssociationTransientCheck();
+
 	@Incubating
 	int getPreferredSqlTypeCodeForBoolean();
 
@@ -327,6 +344,10 @@ public interface SessionFactoryOptions extends QueryEngineOptions {
 
 	@Incubating
 	TimeZoneStorageStrategy getDefaultTimeZoneStorageStrategy();
+
+	boolean isPreferJavaTimeJdbcTypesEnabled();
+
+	boolean isPreferNativeEnumTypesEnabled();
 
 	/**
 	 * The format mapper to use for serializing/deserializing JSON data.

@@ -13,10 +13,13 @@ import java.util.Locale;
 import java.util.Objects;
 
 import org.hibernate.AssertionFailure;
+import org.hibernate.Internal;
 import org.hibernate.MappingException;
 import org.hibernate.boot.Metadata;
 import org.hibernate.boot.model.TruthValue;
+import org.hibernate.boot.model.naming.Identifier;
 import org.hibernate.boot.model.relational.Database;
+import org.hibernate.boot.spi.MetadataBuildingContext;
 import org.hibernate.dialect.Dialect;
 import org.hibernate.engine.jdbc.Size;
 import org.hibernate.engine.spi.Mapping;
@@ -25,6 +28,7 @@ import org.hibernate.metamodel.mapping.JdbcMapping;
 import org.hibernate.query.sqm.function.SqmFunctionRegistry;
 import org.hibernate.sql.Template;
 import org.hibernate.tool.schema.extract.spi.ColumnTypeInformation;
+import org.hibernate.type.BasicType;
 import org.hibernate.type.ComponentType;
 import org.hibernate.type.EntityType;
 import org.hibernate.type.Type;
@@ -39,6 +43,7 @@ import static org.hibernate.internal.util.StringHelper.isEmpty;
 import static org.hibernate.internal.util.StringHelper.lastIndexOfLetter;
 import static org.hibernate.internal.util.StringHelper.nullIfEmpty;
 import static org.hibernate.internal.util.StringHelper.safeInterning;
+import static org.hibernate.type.descriptor.java.JavaTypeHelper.isTemporal;
 
 /**
  * A mapping model object representing a {@linkplain jakarta.persistence.Column column}
@@ -51,18 +56,21 @@ public class Column implements Selectable, Serializable, Cloneable, ColumnTypeIn
 	private Long length;
 	private Integer precision;
 	private Integer scale;
+	private Integer temporalPrecision;
 	private Integer arrayLength;
 	private Value value;
 	private int typeIndex;
 	private String name;
 	private boolean nullable = true;
 	private boolean unique;
+	private String uniqueKeyName;
 	private String sqlTypeName;
 	private Integer sqlTypeCode;
 	private Boolean sqlTypeLob;
 	private boolean quoted;
 	private boolean explicit;
 	int uniqueInteger;
+	private boolean identity;
 	private String comment;
 	private String defaultValue;
 	private String generatedAs;
@@ -122,12 +130,26 @@ public class Column implements Selectable, Serializable, Cloneable, ColumnTypeIn
 		}
 	}
 
+	@Internal
+	public Identifier getNameIdentifier(MetadataBuildingContext buildingContext) {
+		return buildingContext.getMetadataCollector().getDatabase()
+				.toIdentifier( getQuotedName() );
+	}
+
 	public boolean isExplicit() {
 		return explicit;
 	}
 
 	public void setExplicit(boolean explicit) {
 		this.explicit = explicit;
+	}
+
+	public boolean isIdentity() {
+		return identity;
+	}
+
+	public void setIdentity(boolean identity) {
+		this.identity = identity;
 	}
 
 	private static boolean isQuoted(String name) {
@@ -289,7 +311,7 @@ public class Column implements Selectable, Serializable, Cloneable, ColumnTypeIn
 	private String getSqlTypeName(DdlTypeRegistry ddlTypeRegistry, Dialect dialect, Mapping mapping) {
 		if ( sqlTypeName == null ) {
 			final int typeCode = getSqlTypeCode( mapping );
-			final DdlType descriptor = ddlTypeRegistry.getDescriptor( getSqlTypeCode( mapping ) );
+			final DdlType descriptor = ddlTypeRegistry.getDescriptor( typeCode );
 			if ( descriptor == null ) {
 				throw new MappingException(
 						String.format(
@@ -422,22 +444,33 @@ public class Column implements Selectable, Serializable, Cloneable, ColumnTypeIn
 
 	Size calculateColumnSize(Dialect dialect, Mapping mapping) {
 		Type type = getValue().getType();
+		Long lengthToUse = getLength();
+		Integer precisionToUse = getPrecision();
+		Integer scaleToUse = getScale();
 		if ( type instanceof EntityType ) {
 			type = getTypeForEntityValue( mapping, type, getTypeIndex() );
 		}
 		if ( type instanceof ComponentType ) {
 			type = getTypeForComponentValue( mapping, type, getTypeIndex() );
 		}
+		if ( type instanceof BasicType ) {
+			final BasicType<?> basicType = (BasicType<?>) type;
+			if ( isTemporal( basicType.getExpressibleJavaType() ) ) {
+				precisionToUse = getTemporalPrecision();
+				lengthToUse = null;
+				scaleToUse = null;
+			}
+		}
 		if ( type == null ) {
 			throw new AssertionFailure( "no typing information available to determine column size" );
 		}
 		final JdbcMapping jdbcMapping = (JdbcMapping) type;
-		Size size = dialect.getSizeStrategy().resolveSize(
+		final Size size = dialect.getSizeStrategy().resolveSize(
 				jdbcMapping.getJdbcType(),
 				jdbcMapping.getJdbcJavaType(),
-				precision,
-				scale,
-				length
+				precisionToUse,
+				scaleToUse,
+				lengthToUse
 		);
 		size.setArrayLength( arrayLength );
 		return size;
@@ -549,6 +582,14 @@ public class Column implements Selectable, Serializable, Cloneable, ColumnTypeIn
 
 	public void setUnique(boolean unique) {
 		this.unique = unique;
+	}
+
+	public String getUniqueKeyName() {
+		return uniqueKeyName;
+	}
+
+	public void setUniqueKeyName(String keyName) {
+		uniqueKeyName = keyName;
 	}
 
 	public boolean isQuoted() {
@@ -674,6 +715,14 @@ public class Column implements Selectable, Serializable, Cloneable, ColumnTypeIn
 		this.scale = scale;
 	}
 
+	public Integer getTemporalPrecision() {
+		return temporalPrecision;
+	}
+
+	public void setTemporalPrecision(Integer temporalPrecision) {
+		this.temporalPrecision = temporalPrecision;
+	}
+
 	public String getComment() {
 		return comment;
 	}
@@ -755,6 +804,7 @@ public class Column implements Selectable, Serializable, Cloneable, ColumnTypeIn
 		copy.quoted = quoted;
 		copy.nullable = nullable;
 		copy.unique = unique;
+		copy.uniqueKeyName = uniqueKeyName;
 		copy.sqlTypeName = sqlTypeName;
 		copy.sqlTypeCode = sqlTypeCode;
 		copy.uniqueInteger = uniqueInteger; //usually useless
@@ -769,5 +819,4 @@ public class Column implements Selectable, Serializable, Cloneable, ColumnTypeIn
 		copy.columnSize = columnSize;
 		return copy;
 	}
-
 }

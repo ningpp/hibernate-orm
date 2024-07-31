@@ -7,6 +7,8 @@
 package org.hibernate.type;
 
 import org.hibernate.Internal;
+import org.hibernate.type.descriptor.jdbc.EnumJdbcType;
+import org.hibernate.type.descriptor.jdbc.OrdinalEnumJdbcType;
 
 import java.sql.Types;
 
@@ -211,7 +213,6 @@ public class SqlTypes {
 	 * as a synonym for {@link #VARBINARY}.
 	 *
 	 * @see org.hibernate.Length#LONG
-	 *
 	 * @see Types#LONGVARBINARY
 	 * @see org.hibernate.type.descriptor.jdbc.LongVarbinaryJdbcType
 	 */
@@ -356,7 +357,6 @@ public class SqlTypes {
 	 * as a synonym for {@link #NVARCHAR}.
 	 *
 	 * @see org.hibernate.Length#LONG
-	 *
 	 * @see Types#LONGNVARCHAR
 	 * @see org.hibernate.type.descriptor.jdbc.LongNVarcharJdbcType
 	 */
@@ -498,6 +498,109 @@ public class SqlTypes {
 	 */
 	public static final int TIME_UTC = 3007;
 
+
+	// Java Time (java.time) "virtual" JdbcTypes
+
+	/**
+	 * A type code representing a "virtual mapping" of {@linkplain java.time.Instant}
+	 * as a JDBC type using {@linkplain java.sql.ResultSet#getObject} and
+	 * {@linkplain java.sql.PreparedStatement#setObject} which JDBC requires compliant
+	 * drivers to support.
+	 *
+	 * @see org.hibernate.type.descriptor.jdbc.InstantJdbcType
+	 */
+	public static final int INSTANT = 3008;
+
+	/**
+	 * A type code representing a "virtual mapping" of {@linkplain java.time.LocalDateTime}
+	 * as a JDBC type using {@linkplain java.sql.ResultSet#getObject} and
+	 * {@linkplain java.sql.PreparedStatement#setObject} which JDBC requires compliant
+	 * drivers to support.
+	 *
+	 * @see org.hibernate.type.descriptor.jdbc.LocalDateTimeJdbcType
+	 */
+	public static final int LOCAL_DATE_TIME = 3009;
+
+	/**
+	 * A type code representing a "virtual mapping" of {@linkplain java.time.LocalDate}
+	 * as a JDBC type using {@linkplain java.sql.ResultSet#getObject} and
+	 * {@linkplain java.sql.PreparedStatement#setObject} which JDBC requires compliant
+	 * drivers to support.
+	 *
+	 * @see org.hibernate.type.descriptor.jdbc.LocalDateJdbcType
+	 */
+	public static final int LOCAL_DATE = 3010;
+
+	/**
+	 * A type code representing a "virtual mapping" of {@linkplain java.time.LocalTime}
+	 * as a JDBC type using {@linkplain java.sql.ResultSet#getObject} and
+	 * {@linkplain java.sql.PreparedStatement#setObject} which JDBC requires compliant
+	 * drivers to support.
+	 *
+	 * @see org.hibernate.type.descriptor.jdbc.LocalTimeJdbcType
+	 */
+	public static final int LOCAL_TIME = 3011;
+
+	/**
+	 * A type code representing a "virtual mapping" of {@linkplain java.time.OffsetDateTime}
+	 * as a JDBC type using {@linkplain java.sql.ResultSet#getObject} and
+	 * {@linkplain java.sql.PreparedStatement#setObject} which JDBC requires compliant
+	 * drivers to support.
+	 *
+	 * @see org.hibernate.type.descriptor.jdbc.OffsetDateTimeJdbcType
+	 */
+	public static final int OFFSET_DATE_TIME = 3012;
+
+	/**
+	 * A type code representing a "virtual mapping" of {@linkplain java.time.OffsetTime}
+	 * as a JDBC type using {@linkplain java.sql.ResultSet#getObject} and
+	 * {@linkplain java.sql.PreparedStatement#setObject} which JDBC requires compliant
+	 * drivers to support.
+	 *
+	 * @see org.hibernate.type.descriptor.jdbc.OffsetTimeJdbcType
+	 */
+	public static final int OFFSET_TIME = 3013;
+
+	/**
+	 * A type code representing a "virtual mapping" of {@linkplain java.time.ZonedDateTime}
+	 * as a JDBC type using {@linkplain java.sql.ResultSet#getObject} and
+	 * {@linkplain java.sql.PreparedStatement#setObject} which JDBC requires compliant
+	 * drivers to support.
+	 *
+	 * @see org.hibernate.type.descriptor.jdbc.ZonedDateTimeJdbcType
+	 */
+	public static final int ZONED_DATE_TIME = 3014;
+
+	/**
+	 * A type code representing a "virtual mapping" of {@linkplain java.time.Duration}.
+	 *
+	 * @see Types#NUMERIC
+	 * @see org.hibernate.type.descriptor.jdbc.DurationJdbcType
+	 */
+	public static final int DURATION = 3015;
+
+	/**
+	 * A type code for an array of struct objects.
+	 */
+	public static final int STRUCT_ARRAY = 3016;
+
+	/**
+	 * A type code representing an Oracle-style nested table for a struct.
+	 *
+	 * @see org.hibernate.dialect.OracleNestedTableJdbcType
+	 */
+	public final static int STRUCT_TABLE = 3017;
+
+	/**
+	 * A type code for an array of json objects.
+	 */
+	public static final int JSON_ARRAY = 3018;
+
+	/**
+	 * A type code for an array of xml objects.
+	 */
+	public static final int XML_ARRAY = 3019;
+
 	// Interval types
 
 	/**
@@ -534,7 +637,7 @@ public class SqlTypes {
 	 * {@link org.hibernate.dialect.MySQLDialect MySQL} where {@code ENUM}
 	 * types do not have names.
 	 *
-	 * @see org.hibernate.dialect.MySQLEnumJdbcType
+	 * @see EnumJdbcType
 	 *
 	 * @since 6.3
 	 */
@@ -551,15 +654,52 @@ public class SqlTypes {
 	 */
 	public static final int NAMED_ENUM = 6001;
 
+	/**
+	 * A type code representing a SQL {@code ENUM} type for databases like
+	 * {@link org.hibernate.dialect.MySQLDialect MySQL} where {@code ENUM}
+	 * types do not have names. Enum values are ordered by ordinal.
+	 *
+	 * @see OrdinalEnumJdbcType
+	 *
+	 * @since 6.5
+	 */
+	public static final int ORDINAL_ENUM = 6002;
+
+	/**
+	 * A type code representing a SQL {@code ENUM} type for databases like
+	 * {@link org.hibernate.dialect.PostgreSQLDialect PostgreSQL} where
+	 * {@code ENUM} types must have names. Enum values are ordered by ordinal.
+	 *
+	 * @see org.hibernate.dialect.PostgreSQLEnumJdbcType
+	 *
+	 * @since 6.5
+	 */
+	public static final int NAMED_ORDINAL_ENUM = 6003;
+
 
 	/**
 	 * A type code representing an {@code embedding vector} type for databases like
-	 * {@link org.hibernate.dialect.PostgreSQLDialect PostgreSQL} that have special extensions.
+	 * {@link org.hibernate.dialect.PostgreSQLDialect PostgreSQL} and {@link org.hibernate.dialect.OracleDialect Oracle 23ai}.
 	 * An embedding vector essentially is a {@code float[]} with a fixed size.
 	 *
 	 * @since 6.4
 	 */
 	public static final int VECTOR = 10_000;
+
+	/**
+	 * A type code representing a single-byte integer vector type for oracle 23ai database.
+	 */
+	public static final int VECTOR_INT8 = 10_001;
+
+	/**
+	 * A type code representing a single-precision floating-point vector type for oracle 23ai database.
+	 */
+	public static final int VECTOR_FLOAT32 = 10_002;
+
+	/**
+	 * A type code representing a double-precision floating-point type for oracle 23ai database.
+	 */
+	public static final int VECTOR_FLOAT64 = 10_003;
 
 	private SqlTypes() {
 	}
@@ -590,6 +730,7 @@ public class SqlTypes {
 	/**
 	 * Is this a type with a length, that is, is it
 	 * some kind of character string or binary string?
+	 *
 	 * @param typeCode a JDBC type code from {@link Types}
 	 */
 	public static boolean isStringType(int typeCode) {
@@ -603,6 +744,7 @@ public class SqlTypes {
 			case Types.BINARY:
 			case Types.VARBINARY:
 			case Types.LONGVARBINARY:
+				return true;
 			default:
 				return false;
 		}
@@ -611,6 +753,7 @@ public class SqlTypes {
 	/**
 	 * Does the given JDBC type code represent some sort of
 	 * character string type?
+	 *
 	 * @param typeCode a JDBC type code from {@link Types}
 	 */
 	public static boolean isCharacterOrClobType(int typeCode) {
@@ -632,6 +775,7 @@ public class SqlTypes {
 	/**
 	 * Does the given JDBC type code represent some sort of
 	 * character string type?
+	 *
 	 * @param typeCode a JDBC type code from {@link Types}
 	 */
 	public static boolean isCharacterType(int typeCode) {
@@ -651,6 +795,7 @@ public class SqlTypes {
 	/**
 	 * Does the given JDBC type code represent some sort of
 	 * variable-length character string type?
+	 *
 	 * @param typeCode a JDBC type code from {@link Types}
 	 */
 	public static boolean isVarcharType(int typeCode) {
@@ -766,6 +911,7 @@ public class SqlTypes {
 			case TIMESTAMP:
 			case TIMESTAMP_WITH_TIMEZONE:
 			case TIMESTAMP_UTC:
+			case INSTANT:
 				return true;
 			default:
 				return false;
@@ -777,6 +923,13 @@ public class SqlTypes {
 	 */
 	public static boolean isIntervalType(int typeCode) {
 		return typeCode == INTERVAL_SECOND;
+	}
+
+	/**
+	 * Does the given typecode represent a {@code duration} type?
+	 */
+	public static boolean isDurationType(int typeCode) {
+		return typeCode == DURATION;
 	}
 
 	/**

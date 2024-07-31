@@ -517,6 +517,27 @@ class Book {
 
 Again, the `foreignKey` member is optional.
 
+[TIP]
+====
+For mapping a `@OneToOne` association <<one-to-one-pk,to a primary key>> with `@MapsId`, Hibernate lets us use either `@JoinColumn` or `@PrimaryKeyJoinColumn`.
+[source,java]
+----
+@Entity
+class Author {
+    @Id
+    Long id;
+
+    @OneToOne(optional=false, fetch=LAZY)
+    @MapsId
+    @PrimaryKeyJoinColumn(name="personId")
+    Person author;
+
+    ...
+}
+----
+Arguably, the use of `@PrimaryKeyJoinColumn` is clearer.
+====
+
 [[primary-key-column-mappings]]
 === Mapping primary key joins between tables
 
@@ -626,6 +647,21 @@ JDBC drivers are perfectly capable of converting between `String` and `CLOB` or 
 So unless you specifically need to use these JDBC LOB APIs, you _don't_ need the `@Lob` annotation.
 
 Instead, as we just saw in <<column-lengths>>, all you need is to specify a large enough column `length` to accommodate the data you plan to write to that column.
+
+You should usually write this:
+[source,java]
+----
+@Column(length=LONG32) // good, correct column type inferred
+String text;
+----
+instead of this:
+[source,java]
+----
+@Lob // almost always unnecessary
+String text;
+----
+
+This is particularly true for PostgreSQL.
 
 [%unbreakable]
 [WARNING]
@@ -776,6 +812,7 @@ Here we summarize the ones we've just seen in the second half of this chapter, a
 | `@Struct` | Map an embeddable to a SQL UDT with the given name
 | `@TimeZoneStorage` | Specify how the time zone information should be persisted
 | `@JdbcType` or `@JdbcTypeCode` | Use an implementation of `JdbcType` to map an arbitrary SQL type
+| `@Collate` | Specify a collation for a column
 |===
 
 In addition, there are some configuration properties which have a _global_ affect on how basic types map to SQL column types:

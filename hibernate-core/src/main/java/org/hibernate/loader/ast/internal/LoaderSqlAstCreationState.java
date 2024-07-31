@@ -11,6 +11,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+
 import jakarta.persistence.CacheRetrieveMode;
 import jakarta.persistence.CacheStoreMode;
 
@@ -38,6 +40,8 @@ import org.hibernate.sql.ast.spi.SqlAstCreationState;
 import org.hibernate.sql.ast.spi.SqlAstProcessingState;
 import org.hibernate.sql.ast.spi.SqlAstQueryPartProcessingState;
 import org.hibernate.sql.ast.spi.SqlExpressionResolver;
+import org.hibernate.sql.ast.tree.from.FromClause;
+import org.hibernate.sql.ast.tree.predicate.Predicate;
 import org.hibernate.sql.ast.tree.select.QueryPart;
 import org.hibernate.sql.results.graph.DomainResultCreationState;
 import org.hibernate.sql.results.graph.FetchParent;
@@ -106,6 +110,16 @@ public class LoaderSqlAstCreationState
 	}
 
 	@Override
+	public FromClause getFromClause() {
+		return processingState.getFromClause();
+	}
+
+	@Override
+	public void applyPredicate(Predicate predicate) {
+		processingState.applyPredicate( predicate );
+	}
+
+	@Override
 	public void registerTreatedFrom(SqmFrom<?, ?> sqmFrom) {
 		throw new UnsupportedOperationException();
 	}
@@ -141,6 +155,11 @@ public class LoaderSqlAstCreationState
 	}
 
 	@Override
+	public boolean applyOnlyLoadByKeyFilters() {
+		return true;
+	}
+
+	@Override
 	public void registerLockMode(String identificationVariable, LockMode explicitLockMode) {
 		throw new UnsupportedOperationException( "Registering lock modes should only be done for result set mappings" );
 	}
@@ -151,12 +170,12 @@ public class LoaderSqlAstCreationState
 	}
 
 	@Override
-	public ImmutableFetchList visitNestedFetches(FetchParent fetchParent) {
+	public <R> R withNestedFetchParent(FetchParent fetchParent, Function<FetchParent, R> action) {
 		final FetchParent nestingFetchParent = processingState.getNestingFetchParent();
 		processingState.setNestingFetchParent( fetchParent );
-		final ImmutableFetchList fetches = fetchProcessor.visitFetches( fetchParent, this );
+		final R result = action.apply( fetchParent );
 		processingState.setNestingFetchParent( nestingFetchParent );
-		return fetches;
+		return result;
 	}
 
 	@Override

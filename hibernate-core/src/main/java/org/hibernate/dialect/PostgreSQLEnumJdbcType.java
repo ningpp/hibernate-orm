@@ -12,11 +12,13 @@ import org.hibernate.engine.jdbc.Size;
 import org.hibernate.type.descriptor.ValueBinder;
 import org.hibernate.type.descriptor.ValueExtractor;
 import org.hibernate.type.descriptor.WrapperOptions;
+import org.hibernate.type.descriptor.converter.internal.EnumHelper;
 import org.hibernate.type.descriptor.java.JavaType;
 import org.hibernate.type.descriptor.jdbc.BasicBinder;
 import org.hibernate.type.descriptor.jdbc.BasicExtractor;
 import org.hibernate.type.descriptor.jdbc.JdbcLiteralFormatter;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
+import org.hibernate.type.descriptor.jdbc.JdbcTypeIndicators;
 import org.hibernate.type.spi.TypeConfiguration;
 
 import java.sql.CallableStatement;
@@ -24,9 +26,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.Arrays;
+
+import jakarta.persistence.EnumType;
 
 import static java.util.Collections.emptySet;
 import static org.hibernate.type.SqlTypes.NAMED_ENUM;
+import static org.hibernate.type.SqlTypes.OTHER;
 
 /**
  * Represents a named {@code enum} type on PostgreSQL.
@@ -46,8 +52,15 @@ import static org.hibernate.type.SqlTypes.NAMED_ENUM;
  */
 public class PostgreSQLEnumJdbcType implements JdbcType {
 
+	public static final PostgreSQLEnumJdbcType INSTANCE = new PostgreSQLEnumJdbcType();
+
 	@Override
 	public int getJdbcTypeCode() {
+		return OTHER;
+	}
+
+	@Override
+	public int getDefaultSqlTypeCode() {
 		return NAMED_ENUM;
 	}
 
@@ -83,13 +96,13 @@ public class PostgreSQLEnumJdbcType implements JdbcType {
 			@Override
 			protected void doBind(PreparedStatement st, X value, int index, WrapperOptions options)
 					throws SQLException {
-				st.setObject( index, value, Types.OTHER );
+				st.setObject( index, ((Enum<?>) value).name(), Types.OTHER );
 			}
 
 			@Override
 			protected void doBind(CallableStatement st, X value, String name, WrapperOptions options)
 					throws SQLException {
-				st.setObject( name, value, Types.OTHER );
+				st.setObject( name, ((Enum<?>) value).name(), Types.OTHER );
 			}
 		};
 	}
@@ -119,15 +132,39 @@ public class PostgreSQLEnumJdbcType implements JdbcType {
 			JavaType<?> javaType,
 			Size columnSize,
 			Database database,
+			JdbcTypeIndicators context) {
+		addAuxiliaryDatabaseObjects( javaType, database, true );
+	}
+
+	@Override
+	public void addAuxiliaryDatabaseObjects(
+			JavaType<?> javaType,
+			Size columnSize,
+			Database database,
 			TypeConfiguration typeConfiguration) {
+		addAuxiliaryDatabaseObjects( javaType, database, true );
+	}
+
+	protected void addAuxiliaryDatabaseObjects(
+			JavaType<?> javaType,
+			Database database,
+			boolean sortEnumValues) {
 		final Dialect dialect = database.getDialect();
 		final Class<? extends Enum<?>> enumClass = (Class<? extends Enum<?>>) javaType.getJavaType();
-		final String[] create = dialect.getCreateEnumTypeCommand( enumClass );
+		final String enumTypeName = enumClass.getSimpleName();
+		final String[] enumeratedValues = EnumHelper.getEnumeratedValues( enumClass );
+		if ( sortEnumValues ) {
+			Arrays.sort( enumeratedValues );
+		}
+		final String[] create = dialect.getCreateEnumTypeCommand(
+				javaType.getJavaTypeClass().getSimpleName(),
+				enumeratedValues
+		);
 		final String[] drop = dialect.getDropEnumTypeCommand( enumClass );
-		if ( create != null && create.length>0 ) {
+		if ( create != null && create.length > 0 ) {
 			database.addAuxiliaryDatabaseObject(
 					new NamedAuxiliaryDatabaseObject(
-							enumClass.getSimpleName(),
+							enumTypeName,
 							database.getDefaultNamespace(),
 							create,
 							drop,

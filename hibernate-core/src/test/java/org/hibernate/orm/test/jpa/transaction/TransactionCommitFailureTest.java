@@ -70,6 +70,8 @@ public class TransactionCommitFailureTest {
 
 		try {
 			em.getTransaction().begin();
+			// Force connection acquisition
+			em.createQuery( "select 1" ).getResultList();
 			transactionFailureTrigger.set( true );
 			em.getTransaction().commit();
 		}
@@ -92,6 +94,8 @@ public class TransactionCommitFailureTest {
 		EntityManager em = emf.createEntityManager();
 		try {
 			em.getTransaction().begin();
+			// Force connection acquisition
+			em.createQuery( "select 1" ).getResultList();
 			assertEquals( true, connectionIsOpen.get() );
 			transactionFailureTrigger.set( true );
 			em.getTransaction().rollback();
@@ -136,8 +140,9 @@ public class TransactionCommitFailureTest {
 		}
 
 		@Override
-		public void closeConnection(Connection conn) throws SQLException {
-			final ConnectionInvocationHandler handler = (ConnectionInvocationHandler) Proxy.getInvocationHandler( conn );
+		public void closeConnection(Connection connection) throws SQLException {
+			final ConnectionInvocationHandler handler = (ConnectionInvocationHandler)
+					Proxy.getInvocationHandler( connection );
 			super.closeConnection( handler.delegate );
 			connectionIsOpen.set( false );
 		}

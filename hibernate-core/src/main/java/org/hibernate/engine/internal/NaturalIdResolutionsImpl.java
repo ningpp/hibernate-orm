@@ -23,8 +23,8 @@ import org.hibernate.engine.spi.PersistenceContext;
 import org.hibernate.engine.spi.Resolution;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
-import org.hibernate.event.jfr.CachePutEvent;
-import org.hibernate.event.jfr.internal.JfrEventManager;
+import org.hibernate.event.spi.EventManager;
+import org.hibernate.event.spi.HibernateMonitoringEvent;
 import org.hibernate.metamodel.mapping.EntityMappingType;
 import org.hibernate.metamodel.mapping.NaturalIdLogging;
 import org.hibernate.metamodel.mapping.NaturalIdMapping;
@@ -267,7 +267,7 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 
 		final SessionFactoryImplementor factory = s.getFactory();
 		final StatisticsImplementor statistics = factory.getStatistics();
-
+		final EventManager eventManager = s.getEventManager();
 		switch ( source ) {
 			case LOAD: {
 				if ( CacheHelper.fromSharedCache( s, cacheKey, persister, cacheAccess ) != null ) {
@@ -275,7 +275,7 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 					return;
 				}
 				boolean put = false;
-				final CachePutEvent cachePutEvent = JfrEventManager.beginCachePutEvent();
+				final HibernateMonitoringEvent cachePutEvent = eventManager.beginCachePutEvent();
 				try {
 					put = cacheAccess.putFromLoad(
 							s,
@@ -292,14 +292,14 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 					}
 				}
 				finally {
-					JfrEventManager.completeCachePutEvent(
+					eventManager.completeCachePutEvent(
 							cachePutEvent,
 							session(),
 							cacheAccess,
 							rootEntityPersister,
 							put,
 							true,
-							JfrEventManager.CacheActionDescription.ENTITY_LOAD
+							EventManager.CacheActionDescription.ENTITY_LOAD
 					);
 				}
 
@@ -307,7 +307,7 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 			}
 			case INSERT: {
 				boolean put = false;
-				final CachePutEvent cachePutEvent = JfrEventManager.beginCachePutEvent();
+				final HibernateMonitoringEvent cachePutEvent = eventManager.beginCachePutEvent();
 
 				try {
 					put = cacheAccess.insert( s, cacheKey, id );
@@ -319,14 +319,14 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 					}
 				}
 				finally {
-					JfrEventManager.completeCachePutEvent(
+					eventManager.completeCachePutEvent(
 							cachePutEvent,
 							session(),
 							cacheAccess,
 							rootEntityPersister,
 							put,
 							true,
-							JfrEventManager.CacheActionDescription.ENTITY_INSERT
+							EventManager.CacheActionDescription.ENTITY_INSERT
 					);
 				}
 
@@ -360,7 +360,7 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 
 				final SoftLock lock = cacheAccess.lockItem( s, cacheKey, null );
 				boolean put = false;
-				final CachePutEvent cachePutEvent = JfrEventManager.beginCachePutEvent();
+				final HibernateMonitoringEvent cachePutEvent = eventManager.beginCachePutEvent();
 				try {
 					put = cacheAccess.update( s, cacheKey, id );
 					if ( put && statistics.isStatisticsEnabled() ) {
@@ -371,14 +371,14 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 					}
 				}
 				finally {
-					JfrEventManager.completeCachePutEvent(
+					eventManager.completeCachePutEvent(
 							cachePutEvent,
 							session(),
 							cacheAccess,
 							rootEntityPersister,
 							put,
 							true,
-							JfrEventManager.CacheActionDescription.ENTITY_UPDATE
+							EventManager.CacheActionDescription.ENTITY_UPDATE
 					);
 				}
 
@@ -387,7 +387,7 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 							cacheAccess.unlockItem( s, previousCacheKey, removalLock );
 							if (success) {
 								boolean putAfterUpdate = false;
-								final CachePutEvent cachePutEventAfterUpdate = JfrEventManager.beginCachePutEvent();
+								final HibernateMonitoringEvent cachePutEventAfterUpdate = eventManager.beginCachePutEvent();
 								try {
 									putAfterUpdate = cacheAccess.afterUpdate(
 											s,
@@ -404,14 +404,14 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 									}
 								}
 								finally {
-									JfrEventManager.completeCachePutEvent(
+									eventManager.completeCachePutEvent(
 											cachePutEventAfterUpdate,
 											session(),
 											cacheAccess,
 											rootEntityPersister,
 											putAfterUpdate,
 											true,
-											JfrEventManager.CacheActionDescription.ENTITY_AFTER_UPDATE
+											EventManager.CacheActionDescription.ENTITY_AFTER_UPDATE
 									);
 								}
 							}
@@ -433,6 +433,11 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 
 	@Override
 	public void removeSharedResolution(Object id, Object naturalId, EntityMappingType entityDescriptor) {
+		removeSharedResolution( id, naturalId, entityDescriptor, false );
+	}
+
+	@Override
+	public void removeSharedResolution(Object id, Object naturalId, EntityMappingType entityDescriptor, boolean delayToAfterTransactionCompletion) {
 		final NaturalIdMapping naturalIdMapping = entityDescriptor.getNaturalIdMapping();
 		if ( naturalIdMapping == null ) {
 			// nothing to do
@@ -453,7 +458,18 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 		final EntityPersister persister = locatePersisterForKey( entityDescriptor.getEntityPersister() );
 
 		final Object naturalIdCacheKey = cacheAccess.generateCacheKey( naturalId, persister, session() );
-		cacheAccess.evict( naturalIdCacheKey );
+		if ( delayToAfterTransactionCompletion ) {
+			session().asEventSource().getActionQueue().registerProcess(
+				(success, session) -> {
+					if ( success ) {
+						cacheAccess.evict( naturalIdCacheKey );
+					}
+				}
+			);
+		}
+		else {
+			cacheAccess.evict( naturalIdCacheKey );
+		}
 
 //			if ( sessionCachedNaturalIdValues != null
 //					&& !Arrays.equals( sessionCachedNaturalIdValues, deletedNaturalIdValues ) ) {
@@ -479,7 +495,7 @@ public class NaturalIdResolutionsImpl implements NaturalIdResolutions, Serializa
 			cacheResolution( pk, naturalIdValuesFromCurrentObjectState, persister );
 			stashInvalidNaturalIdReference( persister, cachedNaturalIdValues );
 
-			removeSharedResolution( pk, cachedNaturalIdValues, persister );
+			removeSharedResolution( pk, cachedNaturalIdValues, persister, false );
 		}
 	}
 

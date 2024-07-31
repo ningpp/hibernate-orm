@@ -18,6 +18,7 @@ import org.hibernate.MappingException;
 import org.hibernate.boot.model.naming.ObjectNameNormalizer;
 import org.hibernate.boot.model.relational.QualifiedTableName;
 import org.hibernate.boot.model.relational.SqlStringGenerationContext;
+import org.hibernate.dialect.Dialect;
 import org.hibernate.engine.jdbc.env.spi.IdentifierHelper;
 import org.hibernate.engine.jdbc.env.spi.JdbcEnvironment;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
@@ -88,7 +89,7 @@ public class IncrementGenerator implements IdentifierGenerator, StandardGenerato
 	public void configure(Type type, Properties parameters, ServiceRegistry serviceRegistry) throws MappingException {
 		returnClass = type.getReturnedClass();
 
-		final JdbcEnvironment jdbcEnvironment = serviceRegistry.getService( JdbcEnvironment.class );
+		final JdbcEnvironment jdbcEnvironment = serviceRegistry.requireService( JdbcEnvironment.class );
 		final ObjectNameNormalizer normalizer =
 				(ObjectNameNormalizer) parameters.get( IDENTIFIER_NORMALIZER );
 
@@ -127,8 +128,12 @@ public class IncrementGenerator implements IdentifierGenerator, StandardGenerato
 				union.append( "select max(" ).append( column ).append( ") as mx from " );
 			}
 			union.append( tableName );
+			final Dialect dialect = context.getDialect();
 			if ( i < physicalTableNames.size() - 1 ) {
 				union.append( " union " );
+				if ( dialect.supportsUnionAll() ) {
+					union.append( "all " );
+				}
 			}
 		}
 		String maxColumn;

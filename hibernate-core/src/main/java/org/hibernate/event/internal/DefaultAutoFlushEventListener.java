@@ -11,10 +11,10 @@ import org.hibernate.HibernateException;
 import org.hibernate.engine.spi.ActionQueue;
 import org.hibernate.engine.spi.PersistenceContext;
 import org.hibernate.engine.spi.SessionEventListenerManager;
-import org.hibernate.event.jfr.PartialFlushEvent;
-import org.hibernate.event.jfr.internal.JfrEventManager;
 import org.hibernate.event.spi.AutoFlushEvent;
 import org.hibernate.event.spi.AutoFlushEventListener;
+import org.hibernate.event.spi.EventManager;
+import org.hibernate.event.spi.HibernateMonitoringEvent;
 import org.hibernate.event.spi.EventSource;
 import org.hibernate.internal.CoreMessageLogger;
 import org.hibernate.stat.spi.StatisticsImplementor;
@@ -36,10 +36,12 @@ public class DefaultAutoFlushEventListener extends AbstractFlushingEventListener
 	 * 
 	 * @param event The auto-flush event to be handled.
 	 */
+	@Override
 	public void onAutoFlush(AutoFlushEvent event) throws HibernateException {
 		final EventSource source = event.getSession();
 		final SessionEventListenerManager eventListenerManager = source.getEventListenerManager();
-		final PartialFlushEvent partialFlushEvent = JfrEventManager.beginPartialFlushEvent();
+		final EventManager eventManager = source.getEventManager();
+		final HibernateMonitoringEvent partialFlushEvent = eventManager.beginPartialFlushEvent();
 		try {
 			eventListenerManager.partialFlushStart();
 
@@ -47,15 +49,20 @@ public class DefaultAutoFlushEventListener extends AbstractFlushingEventListener
 				// Need to get the number of collection removals before flushing to executions
 				// (because flushing to executions can add collection removal actions to the action queue).
 				final ActionQueue actionQueue = source.getActionQueue();
+				final EventSource session = event.getSession();
+				final PersistenceContext persistenceContext = session.getPersistenceContextInternal();
+				if ( !event.isSkipPreFlush() ) {
+					preFlush( session, persistenceContext );
+				}
 				final int oldSize = actionQueue.numberOfCollectionRemovals();
-				flushEverythingToExecutions( event );
+				flushEverythingToExecutions( event, persistenceContext, session );
 				if ( flushIsReallyNeeded( event, source ) ) {
 					LOG.trace( "Need to execute flush" );
 					event.setFlushRequired( true );
 
 					// note: performExecutions() clears all collectionXxxxtion
 					// collections (the collection actions) in the session
-					final org.hibernate.event.jfr.FlushEvent jfrFlushEvent = JfrEventManager.beginFlushEvent();
+					final HibernateMonitoringEvent flushEvent = eventManager.beginFlushEvent();
 					try {
 						performExecutions( source );
 						postFlush( source );
@@ -63,7 +70,7 @@ public class DefaultAutoFlushEventListener extends AbstractFlushingEventListener
 						postPostFlush( source );
 					}
 					finally {
-						JfrEventManager.completeFlushEvent( jfrFlushEvent, event, true );
+						eventManager.completeFlushEvent( flushEvent, event, true );
 					}
 					final StatisticsImplementor statistics = source.getFactory().getStatistics();
 					if ( statistics.isStatisticsEnabled() ) {
@@ -78,11 +85,28 @@ public class DefaultAutoFlushEventListener extends AbstractFlushingEventListener
 			}
 		}
 		finally {
-			JfrEventManager.completePartialFlushEvent( partialFlushEvent, event );
+			eventManager.completePartialFlushEvent( partialFlushEvent, event );
 			eventListenerManager.partialFlushEnd(
 					event.getNumberOfEntitiesProcessed(),
 					event.getNumberOfEntitiesProcessed()
 			);
+		}
+	}
+
+	@Override
+	public void onAutoPreFlush(EventSource source) throws HibernateException {
+		final SessionEventListenerManager eventListenerManager = source.getEventListenerManager();
+		eventListenerManager.prePartialFlushStart();
+		final EventManager eventManager = source.getEventManager();
+		HibernateMonitoringEvent hibernateMonitoringEvent = eventManager.beginPrePartialFlush();
+		try {
+			if ( flushMightBeNeeded( source ) ) {
+				preFlush( source, source.getPersistenceContextInternal() );
+			}
+		}
+		finally {
+			eventManager.completePrePartialFlush( hibernateMonitoringEvent, source );
+			eventListenerManager.prePartialFlushEnd();
 		}
 	}
 

@@ -13,12 +13,13 @@ import java.util.Map;
 import javax.sql.DataSource;
 
 import org.hibernate.HibernateException;
+import org.hibernate.engine.jdbc.connections.internal.DatabaseConnectionInfoImpl;
 import org.hibernate.engine.jdbc.connections.spi.ConnectionProvider;
+import org.hibernate.engine.jdbc.connections.spi.DatabaseConnectionInfo;
+import org.hibernate.internal.log.ConnectionInfoLogger;
 import org.hibernate.service.UnknownUnwrapTypeException;
 import org.hibernate.service.spi.Configurable;
 import org.hibernate.service.spi.Stoppable;
-
-import org.jboss.logging.Logger;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
@@ -33,8 +34,6 @@ public class HikariCPConnectionProvider implements ConnectionProvider, Configura
 
 	private static final long serialVersionUID = -9131625057941275711L;
 
-	private static final Logger LOGGER = Logger.getLogger( HikariCPConnectionProvider.class );
-
 	/**
 	 * HikariCP configuration.
 	 */
@@ -45,6 +44,8 @@ public class HikariCPConnectionProvider implements ConnectionProvider, Configura
 	 */
 	private HikariDataSource hds = null;
 
+	private DatabaseConnectionInfo dbinfo;
+
 	// *************************************************************************
 	// Configurable
 	// *************************************************************************
@@ -52,17 +53,23 @@ public class HikariCPConnectionProvider implements ConnectionProvider, Configura
 	@Override
 	public void configure(Map<String, Object> props) throws HibernateException {
 		try {
-			LOGGER.debug( "Configuring HikariCP" );
+			ConnectionInfoLogger.INSTANCE.configureConnectionPool( "HikariCP" );
 
 			hcfg = HikariConfigurationUtil.loadConfiguration( props );
 			hds = new HikariDataSource( hcfg );
 
+			dbinfo = new DatabaseConnectionInfoImpl()
+					.setDBUrl( hcfg.getJdbcUrl() )
+					.setDBDriverName( hcfg.getDriverClassName() )
+					.setDBAutoCommitMode( Boolean.toString( hcfg.isAutoCommit() ) )
+					.setDBIsolationLevel( hcfg.getTransactionIsolation() )
+					.setDBMinPoolSize( String.valueOf(hcfg.getMinimumIdle()) )
+					.setDBMaxPoolSize( String.valueOf(hcfg.getMaximumPoolSize()) );
 		}
 		catch (Exception e) {
+			ConnectionInfoLogger.INSTANCE.unableToInstantiateConnectionPool( e );
 			throw new HibernateException( e );
 		}
-
-		LOGGER.debug( "HikariCP Configured" );
 	}
 
 	// *************************************************************************
@@ -71,17 +78,12 @@ public class HikariCPConnectionProvider implements ConnectionProvider, Configura
 
 	@Override
 	public Connection getConnection() throws SQLException {
-		Connection conn = null;
-		if ( hds != null ) {
-			conn = hds.getConnection();
-		}
-
-		return conn;
+		return hds != null ? hds.getConnection() : null;
 	}
 
 	@Override
-	public void closeConnection(Connection conn) throws SQLException {
-		conn.close();
+	public void closeConnection(Connection connection) throws SQLException {
+		connection.close();
 	}
 
 	@Override
@@ -90,17 +92,22 @@ public class HikariCPConnectionProvider implements ConnectionProvider, Configura
 	}
 
 	@Override
+	public DatabaseConnectionInfo getDatabaseConnectionInfo() {
+		return dbinfo;
+	}
+
+	@Override
 	public boolean isUnwrappableAs(Class<?> unwrapType) {
 		return ConnectionProvider.class.equals( unwrapType )
-				|| HikariCPConnectionProvider.class.isAssignableFrom( unwrapType )
-				|| DataSource.class.isAssignableFrom( unwrapType );
+			|| HikariCPConnectionProvider.class.isAssignableFrom( unwrapType )
+			|| DataSource.class.isAssignableFrom( unwrapType );
 	}
 
 	@Override
 	@SuppressWarnings("unchecked")
 	public <T> T unwrap(Class<T> unwrapType) {
-		if ( ConnectionProvider.class.equals( unwrapType ) ||
-				HikariCPConnectionProvider.class.isAssignableFrom( unwrapType ) ) {
+		if ( ConnectionProvider.class.equals( unwrapType )
+				|| HikariCPConnectionProvider.class.isAssignableFrom( unwrapType ) ) {
 			return (T) this;
 		}
 		else if ( DataSource.class.isAssignableFrom( unwrapType ) ) {
@@ -117,8 +124,8 @@ public class HikariCPConnectionProvider implements ConnectionProvider, Configura
 
 	@Override
 	public void stop() {
-		HikariDataSource hds = this.hds;
 		if ( hds != null ) {
+			ConnectionInfoLogger.INSTANCE.cleaningUpConnectionPool( "HikariCP" );
 			hds.close();
 		}
 	}

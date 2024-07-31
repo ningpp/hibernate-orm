@@ -24,6 +24,7 @@ import java.util.GregorianCalendar;
 import jakarta.persistence.TemporalType;
 
 import org.hibernate.dialect.Dialect;
+import org.hibernate.type.SqlTypes;
 import org.hibernate.type.descriptor.DateTimeUtils;
 import org.hibernate.type.descriptor.WrapperOptions;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
@@ -52,6 +53,9 @@ public class LocalTimeJavaType extends AbstractTemporalJavaType<LocalTime> {
 
 	@Override
 	public JdbcType getRecommendedJdbcType(JdbcTypeIndicators context) {
+		if ( context.isPreferJavaTimeJdbcTypesEnabled() ) {
+			return context.getJdbcType( SqlTypes.LOCAL_TIME );
+		}
 		return context.getJdbcType( Types.TIME );
 	}
 
@@ -132,9 +136,14 @@ public class LocalTimeJavaType extends AbstractTemporalJavaType<LocalTime> {
 		if (value instanceof Time) {
 			final Time time = (Time) value;
 			final LocalTime localTime = time.toLocalTime();
-			final long millis = time.getTime() % 1000;
+			long millis = time.getTime() % 1000;
 			if ( millis == 0 ) {
 				return localTime;
+			}
+			if ( millis < 0 ) {
+				// The milliseconds for a Time could be negative,
+				// which usually means the time is in a different time zone
+				millis += 1_000L;
 			}
 			return localTime.with( ChronoField.NANO_OF_SECOND, millis * 1_000_000L );
 		}
@@ -165,7 +174,7 @@ public class LocalTimeJavaType extends AbstractTemporalJavaType<LocalTime> {
 
 	@Override
 	public boolean isWider(JavaType<?> javaType) {
-		switch ( javaType.getJavaType().getTypeName() ) {
+		switch ( javaType.getTypeName() ) {
 			case "java.sql.Time":
 				return true;
 			default:

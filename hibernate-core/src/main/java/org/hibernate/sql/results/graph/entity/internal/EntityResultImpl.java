@@ -6,7 +6,7 @@
  */
 package org.hibernate.sql.results.graph.entity.internal;
 
-import org.hibernate.LockMode;
+import org.hibernate.annotations.NotFoundAction;
 import org.hibernate.metamodel.mapping.EntityValuedModelPart;
 import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.ast.tree.from.TableGroup;
@@ -14,19 +14,23 @@ import org.hibernate.sql.ast.tree.from.TableGroupJoin;
 import org.hibernate.sql.ast.tree.from.TableGroupProducer;
 import org.hibernate.sql.results.graph.AssemblerCreationState;
 import org.hibernate.sql.results.graph.DomainResultAssembler;
-import org.hibernate.sql.results.graph.FetchParentAccess;
 import org.hibernate.sql.results.graph.Fetchable;
 import org.hibernate.sql.results.graph.FetchableContainer;
 import org.hibernate.sql.results.graph.Initializer;
+import org.hibernate.sql.results.graph.InitializerParent;
+import org.hibernate.sql.results.graph.InitializerProducer;
 import org.hibernate.sql.results.graph.entity.AbstractEntityResultGraphNode;
 import org.hibernate.sql.results.graph.entity.EntityResult;
+
+import static org.hibernate.internal.util.NullnessUtil.castNonNull;
 
 /**
  * Standard ReturnEntity impl
  *
  * @author Steve Ebersole
  */
-public class EntityResultImpl extends AbstractEntityResultGraphNode implements EntityResult {
+public class EntityResultImpl extends AbstractEntityResultGraphNode
+		implements EntityResult, InitializerProducer<EntityResultImpl> {
 
 	private final TableGroup tableGroup;
 	private final String resultVariable;
@@ -48,7 +52,8 @@ public class EntityResultImpl extends AbstractEntityResultGraphNode implements E
 				final NavigablePath navigablePath = tableGroupJoin.getNavigablePath();
 				if ( tableGroupJoin.getJoinedGroup().isFetched()
 						&& fetchable.getFetchableName().equals( navigablePath.getLocalName() )
-						&& tableGroupJoin.getJoinedGroup().getModelPart() == fetchable ) {
+						&& tableGroupJoin.getJoinedGroup().getModelPart() == fetchable
+						&& castNonNull( navigablePath.getParent() ).equals( getNavigablePath() ) ) {
 					return navigablePath;
 				}
 			}
@@ -71,29 +76,43 @@ public class EntityResultImpl extends AbstractEntityResultGraphNode implements E
 		return resultVariable;
 	}
 
-	protected LockMode getLockMode(AssemblerCreationState creationState) {
-		return creationState.determineEffectiveLockMode( tableGroup.getSourceAlias() );
+	protected String getSourceAlias() {
+		return tableGroup.getSourceAlias();
 	}
 
 	@Override
 	public DomainResultAssembler createResultAssembler(
-			FetchParentAccess parentAccess,
+			InitializerParent parent,
 			AssemblerCreationState creationState) {
-		final Initializer initializer = creationState.resolveInitializer(
-				getNavigablePath(),
-				getReferencedModePart(),
-				() -> new EntityResultInitializer(
-						this,
-						getNavigablePath(),
-						getLockMode( creationState ),
-						getIdentifierFetch(),
-						getDiscriminatorFetch(),
-						getRowIdResult(),
-						creationState
-				)
+		return new EntityAssembler(
+				this.getResultJavaType(),
+				creationState.resolveInitializer( this, parent, this ).asEntityInitializer()
 		);
+	}
 
-		return new EntityAssembler( this.getResultJavaType(), initializer.asEntityInitializer() );
+	@Override
+	public Initializer<?> createInitializer(
+			EntityResultImpl resultGraphNode,
+			InitializerParent<?> parent,
+			AssemblerCreationState creationState) {
+		return resultGraphNode.createInitializer( parent, creationState );
+	}
+
+	@Override
+	public Initializer<?> createInitializer(InitializerParent<?> parent, AssemblerCreationState creationState) {
+		return new EntityInitializerImpl(
+				this,
+				getSourceAlias(),
+				getIdentifierFetch(),
+				getDiscriminatorFetch(),
+				null,
+				getRowIdResult(),
+				NotFoundAction.EXCEPTION,
+				false,
+				null,
+				true,
+				creationState
+		);
 	}
 
 	@Override

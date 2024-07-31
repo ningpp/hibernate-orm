@@ -26,6 +26,7 @@ import org.hibernate.Remove;
 import org.hibernate.TimeZoneStorageStrategy;
 import org.hibernate.annotations.OnDeleteAction;
 import org.hibernate.annotations.common.reflection.XProperty;
+import org.hibernate.annotations.common.reflection.java.JavaXMember;
 import org.hibernate.boot.model.convert.internal.ClassBasedConverterDescriptor;
 import org.hibernate.boot.model.convert.spi.ConverterDescriptor;
 import org.hibernate.boot.model.convert.spi.JpaAttributeConverterCreationContext;
@@ -38,7 +39,6 @@ import org.hibernate.boot.spi.MetadataBuildingContext;
 import org.hibernate.boot.spi.MetadataImplementor;
 import org.hibernate.dialect.Dialect;
 import org.hibernate.engine.spi.Mapping;
-import org.hibernate.id.IdentifierGenerator;
 import org.hibernate.id.IdentityGenerator;
 import org.hibernate.id.factory.IdentifierGeneratorFactory;
 import org.hibernate.id.factory.spi.CustomIdGeneratorCreationContext;
@@ -71,6 +71,7 @@ import static org.hibernate.internal.util.collections.ArrayHelper.toBooleanArray
  * A mapping model object that represents any value that maps to columns.
  *
  * @author Gavin King
+ * @author Yanming Zhou
  */
 public abstract class SimpleValue implements KeyValue {
 	private static final CoreMessageLogger log = CoreLogging.messageLogger( SimpleValue.class );
@@ -136,6 +137,7 @@ public abstract class SimpleValue implements KeyValue {
 		this.table = original.table;
 		this.foreignKeyName = original.foreignKeyName;
 		this.foreignKeyDefinition = original.foreignKeyDefinition;
+		this.foreignKeyEnabled = original.foreignKeyEnabled;
 		this.alternateUniqueKey = original.alternateUniqueKey;
 		this.onDeleteAction = original.onDeleteAction;
 		this.attributeConverterDescriptor = original.attributeConverterDescriptor;
@@ -300,7 +302,7 @@ public abstract class SimpleValue implements KeyValue {
 			final ClassLoaderService cls = getMetadata()
 					.getMetadataBuildingOptions()
 					.getServiceRegistry()
-					.getService( ClassLoaderService.class );
+					.requireService( ClassLoaderService.class );
 			try {
 				final Class<? extends AttributeConverter<?,?>> converterClass = cls.classForName( converterClassName );
 				this.attributeConverterDescriptor = new ClassBasedConverterDescriptor(
@@ -368,23 +370,11 @@ public abstract class SimpleValue implements KeyValue {
 	}
 
 	@Override
-	public void createUniqueKey() {
+	public void createUniqueKey(MetadataBuildingContext context) {
 		if ( hasFormula() ) {
 			throw new MappingException( "unique key constraint involves formulas" );
 		}
-		getTable().createUniqueKey( getConstraintColumns() );
-	}
-
-	/**
-	 * Returns the cached {@link IdentifierGenerator}, or null if
-	 * {@link #createIdentifierGenerator(IdentifierGeneratorFactory, Dialect, String, String, RootClass)}
-	 * was never completed.
-	 *
-	 * @deprecated not used and no longer supported.
-	 */
-	@Deprecated(since = "6.0")
-	public IdentifierGenerator getIdentifierGenerator() {
-		return (IdentifierGenerator) generator;
+		getTable().createUniqueKey( getConstraintColumns(), context );
 	}
 
 	@Internal
@@ -402,18 +392,32 @@ public abstract class SimpleValue implements KeyValue {
 			IdentifierGeneratorFactory identifierGeneratorFactory,
 			Dialect dialect,
 			RootClass rootClass) throws MappingException {
-		if ( generator != null ) {
-			return generator;
+		if ( generator == null ) {
+			if ( customIdGeneratorCreator != null ) {
+				generator = customIdGeneratorCreator.createGenerator(
+						new IdGeneratorCreationContext( identifierGeneratorFactory, null, null, rootClass )
+				);
+			}
+			else {
+				generator = createLegacyIdentifierGenerator(this, identifierGeneratorFactory, dialect, null, null, rootClass );
+				if ( generator instanceof IdentityGenerator ) {
+					setColumnToIdentity();
+				}
+			}
 		}
-		else if ( customIdGeneratorCreator != null ) {
-			generator = customIdGeneratorCreator.createGenerator(
-					new IdGeneratorCreationContext( identifierGeneratorFactory, null, null, rootClass )
-			);
-			return generator;
+		return generator;
+	}
+
+	private void setColumnToIdentity() {
+		if ( getColumnSpan() != 1 ) {
+			throw new MappingException( "Identity generation requires exactly one column" );
+		}
+		final Selectable column = getColumn(0);
+		if ( column instanceof Column ) {
+			( (Column) column).setIdentity( true );
 		}
 		else {
-			generator = createLegacyIdentifierGenerator(this, identifierGeneratorFactory, dialect, null, null, rootClass );
-			return generator;
+			throw new MappingException( "Identity generation requires a column" );
 		}
 	}
 
@@ -444,14 +448,6 @@ public abstract class SimpleValue implements KeyValue {
 	 */
 	public void setIdentifierGeneratorStrategy(String identifierGeneratorStrategy) {
 		this.identifierGeneratorStrategy = identifierGeneratorStrategy;
-	}
-
-	@Deprecated
-	@Override
-	public boolean isIdentityColumn(IdentifierGeneratorFactory identifierGeneratorFactory, Dialect dialect) {
-		return IdentityGenerator.class.isAssignableFrom(
-				identifierGeneratorFactory.getIdentifierGeneratorClass( identifierGeneratorStrategy )
-		);
 	}
 
 	public Map<String, Object> getIdentifierGeneratorParameters() {
@@ -658,7 +654,7 @@ public abstract class SimpleValue implements KeyValue {
 				getMetadata()
 						.getMetadataBuildingOptions()
 						.getServiceRegistry()
-						.getService(ClassLoaderService.class)
+						.requireService( ClassLoaderService.class )
 		);
 	}
 
@@ -702,7 +698,7 @@ public abstract class SimpleValue implements KeyValue {
 						return getMetadata()
 								.getMetadataBuildingOptions()
 								.getServiceRegistry()
-								.getService( ManagedBeanRegistry.class );
+								.requireService( ManagedBeanRegistry.class );
 					}
 
 					@Override
@@ -772,11 +768,11 @@ public abstract class SimpleValue implements KeyValue {
 		// todo : cache the AttributeConverterTypeAdapter in case that AttributeConverter is applied multiple times.
 		return new ConvertedBasicTypeImpl<>(
 				TYPE_NAME_PREFIX
-						+ jpaAttributeConverter.getConverterJavaType().getJavaType().getTypeName(),
+						+ jpaAttributeConverter.getConverterJavaType().getTypeName(),
 				String.format(
 						"BasicType adapter for AttributeConverter<%s,%s>",
-						domainJavaType.getJavaType().getTypeName(),
-						relationalJavaType.getJavaType().getTypeName()
+						domainJavaType.getTypeName(),
+						relationalJavaType.getTypeName()
 				),
 				metadata.getTypeConfiguration().getJdbcTypeRegistry().getDescriptor( jdbcTypeCode ),
 				jpaAttributeConverter
@@ -935,13 +931,14 @@ public abstract class SimpleValue implements KeyValue {
 			final ClassLoaderService classLoaderService = getMetadata()
 					.getMetadataBuildingOptions()
 					.getServiceRegistry()
-					.getService( ClassLoaderService.class );
+					.requireService( ClassLoaderService.class );
 			typeParameters.put(
 					DynamicParameterizedType.PARAMETER_TYPE,
 					new ParameterTypeImpl(
 							classLoaderService.classForTypeName(
 									typeParameters.getProperty(DynamicParameterizedType.RETURNED_CLASS)
 							),
+							xProperty instanceof JavaXMember ? ((JavaXMember) xProperty ).getJavaType() : null,
 							annotations,
 							table.getCatalog(),
 							table.getSchema(),
@@ -980,10 +977,11 @@ public abstract class SimpleValue implements KeyValue {
 			final ClassLoaderService classLoaderService = getMetadata()
 					.getMetadataBuildingOptions()
 					.getServiceRegistry()
-					.getService( ClassLoaderService.class );
+					.requireService( ClassLoaderService.class );
 
 			return new ParameterTypeImpl(
 					classLoaderService.classForTypeName(typeParameters.getProperty(DynamicParameterizedType.RETURNED_CLASS)),
+					xProperty instanceof JavaXMember ? ((JavaXMember) xProperty ).getJavaType() : null,
 					annotations,
 					table.getCatalog(),
 					table.getSchema(),
@@ -1001,6 +999,7 @@ public abstract class SimpleValue implements KeyValue {
 	private static final class ParameterTypeImpl implements DynamicParameterizedType.ParameterType {
 
 		private final Class<?> returnedClass;
+		private final java.lang.reflect.Type returnedJavaType;
 		private final Annotation[] annotationsMethod;
 		private final String catalog;
 		private final String schema;
@@ -1011,6 +1010,7 @@ public abstract class SimpleValue implements KeyValue {
 
 		private ParameterTypeImpl(
 				Class<?> returnedClass,
+				java.lang.reflect.Type returnedJavaType,
 				Annotation[] annotationsMethod,
 				String catalog,
 				String schema,
@@ -1019,6 +1019,7 @@ public abstract class SimpleValue implements KeyValue {
 				String[] columns,
 				Long[] columnLengths) {
 			this.returnedClass = returnedClass;
+			this.returnedJavaType = returnedJavaType != null ? returnedJavaType : returnedClass;
 			this.annotationsMethod = annotationsMethod;
 			this.catalog = catalog;
 			this.schema = schema;
@@ -1031,6 +1032,11 @@ public abstract class SimpleValue implements KeyValue {
 		@Override
 		public Class<?> getReturnedClass() {
 			return returnedClass;
+		}
+
+		@Override
+		public java.lang.reflect.Type getReturnedJavaType() {
+			return returnedJavaType;
 		}
 
 		@Override
@@ -1121,5 +1127,22 @@ public abstract class SimpleValue implements KeyValue {
 		public Property getProperty() {
 			return rootClass.getIdentifierProperty();
 		}
+
+		// we could add these if it helps integrate old infrastructure
+//		@Override
+//		public Properties getParameters() {
+//			final Value value = getProperty().getValue();
+//			if ( !value.isSimpleValue() ) {
+//				throw new IllegalStateException( "not a simple-valued property" );
+//			}
+//			final Dialect dialect = getDatabase().getDialect();
+//			return collectParameters( (SimpleValue) value, dialect, defaultCatalog, defaultSchema, rootClass );
+//		}
+//
+//		@Override
+//		public SqlStringGenerationContext getSqlStringGenerationContext() {
+//			final Database database = getDatabase();
+//			return fromExplicit( database.getJdbcEnvironment(), database, defaultCatalog, defaultSchema );
+//		}
 	}
 }

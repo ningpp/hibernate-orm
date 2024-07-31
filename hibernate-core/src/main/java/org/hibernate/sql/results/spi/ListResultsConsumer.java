@@ -25,12 +25,21 @@ import org.hibernate.type.descriptor.java.spi.EntityJavaType;
 import org.hibernate.type.descriptor.java.spi.JavaTypeRegistry;
 import org.hibernate.type.spi.TypeConfiguration;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
+
 /**
  * ResultsConsumer for creating a List of results
  *
  * @author Steve Ebersole
  */
 public class ListResultsConsumer<R> implements ResultsConsumer<List<R>, R> {
+
+	/**
+	 * Let's be reasonable, a row estimate greater than 1M rows is probably either a mis-estimation or bug,
+	 * so let's set 2^20 which is a bit above 1M as maximum collection size.
+	 */
+	private static final int INITIAL_COLLECTION_SIZE_LIMIT = 1 << 20;
+
 	private static final ListResultsConsumer<?> NEVER_DE_DUP_CONSUMER = new ListResultsConsumer<>( UniqueSemantic.NEVER );
 	private static final ListResultsConsumer<?> ALLOW_DE_DUP_CONSUMER = new ListResultsConsumer<>( UniqueSemantic.ALLOW );
 	private static final ListResultsConsumer<?> IGNORE_DUP_CONSUMER = new ListResultsConsumer<>( UniqueSemantic.NONE );
@@ -96,11 +105,12 @@ public class ListResultsConsumer<R> implements ResultsConsumer<List<R>, R> {
 	}
 
 	private static class Results<R> {
-		private final List<R> results = new ArrayList<>();
+		private final List<R> results;
 		private final JavaType<R> resultJavaType;
 
-		public Results(JavaType<R> resultJavaType) {
+		public Results(JavaType<R> resultJavaType, int initialSize) {
 			this.resultJavaType = resultJavaType;
+			this.results = initialSize > 0 ? new ArrayList<>( initialSize ) : new ArrayList<>();
 		}
 
 		public boolean addUnique(R result) {
@@ -125,10 +135,11 @@ public class ListResultsConsumer<R> implements ResultsConsumer<List<R>, R> {
 	private static class EntityResult<R> extends Results<R> {
 		private static final Object DUMP_VALUE = new Object();
 
-		private final IdentityHashMap<R, Object> added = new IdentityHashMap<>();
+		private final IdentityHashMap<R, Object> added;
 
-		public EntityResult(JavaType<R> resultJavaType) {
-			super( resultJavaType );
+		public EntityResult(JavaType<R> resultJavaType, int initialSize) {
+			super( resultJavaType, initialSize );
+			added = initialSize > 0 ? new IdentityHashMap<>( initialSize ) : new IdentityHashMap<>();
 		}
 
 		public boolean addUnique(R result) {
@@ -148,14 +159,16 @@ public class ListResultsConsumer<R> implements ResultsConsumer<List<R>, R> {
 			JdbcValuesSourceProcessingStateStandardImpl jdbcValuesSourceProcessingState,
 			RowProcessingStateStandardImpl rowProcessingState,
 			RowReader<R> rowReader) {
-		final PersistenceContext persistenceContext = session.getPersistenceContext();
+		final PersistenceContext persistenceContext = session.getPersistenceContextInternal();
 		final TypeConfiguration typeConfiguration = session.getTypeConfiguration();
 		final QueryOptions queryOptions = rowProcessingState.getQueryOptions();
-		RuntimeException ex = null;
-		try {
-			persistenceContext.beforeLoad();
-			persistenceContext.getLoadContexts().register( jdbcValuesSourceProcessingState );
 
+		rowReader.startLoading( rowProcessingState );
+
+		RuntimeException ex = null;
+		persistenceContext.beforeLoad();
+		persistenceContext.getLoadContexts().register( jdbcValuesSourceProcessingState );
+		try {
 			final JavaType<R> domainResultJavaType = resolveDomainResultJavaType(
 					rowReader.getDomainResultResultJavaType(),
 					rowReader.getResultJavaTypes(),
@@ -163,30 +176,31 @@ public class ListResultsConsumer<R> implements ResultsConsumer<List<R>, R> {
 			);
 
 			final boolean isEntityResultType = domainResultJavaType instanceof EntityJavaType;
+			final int initialCollectionSize = Math.min( jdbcValues.getResultCountEstimate(), INITIAL_COLLECTION_SIZE_LIMIT );
 
 			final Results<R> results;
 			if ( isEntityResultType
 					&& ( uniqueSemantic == UniqueSemantic.ALLOW
 						|| uniqueSemantic == UniqueSemantic.FILTER ) ) {
-				results = new EntityResult<>( domainResultJavaType );
+				results = new EntityResult<>( domainResultJavaType, initialCollectionSize );
 			}
 			else {
-				results = new Results<>( domainResultJavaType );
+				results = new Results<>( domainResultJavaType, initialCollectionSize );
 			}
 
 			int readRows = 0;
 			if ( uniqueSemantic == UniqueSemantic.FILTER
-					|| uniqueSemantic == UniqueSemantic.ASSERT && rowProcessingState.hasCollectionInitializers()
+					|| uniqueSemantic == UniqueSemantic.ASSERT && rowReader.hasCollectionInitializers()
 					|| uniqueSemantic == UniqueSemantic.ALLOW && isEntityResultType ) {
 				while ( rowProcessingState.next() ) {
-					results.addUnique( rowReader.readRow( rowProcessingState, processingOptions ) );
-					rowProcessingState.finishRowProcessing();
+					final boolean added = results.addUnique( rowReader.readRow( rowProcessingState ) );
+					rowProcessingState.finishRowProcessing( added );
 					readRows++;
 				}
 			}
 			else if ( uniqueSemantic == UniqueSemantic.ASSERT ) {
 				while ( rowProcessingState.next() ) {
-					if ( !results.addUnique( rowReader.readRow( rowProcessingState, processingOptions ) ) ) {
+					if ( !results.addUnique( rowReader.readRow( rowProcessingState ) ) ) {
 						throw new HibernateException(
 								String.format(
 										Locale.ROOT,
@@ -195,25 +209,20 @@ public class ListResultsConsumer<R> implements ResultsConsumer<List<R>, R> {
 								)
 						);
 					}
-					rowProcessingState.finishRowProcessing();
+					rowProcessingState.finishRowProcessing( true );
 					readRows++;
 				}
 			}
 			else {
 				while ( rowProcessingState.next() ) {
-					results.add( rowReader.readRow( rowProcessingState, processingOptions ) );
-					rowProcessingState.finishRowProcessing();
+					results.add( rowReader.readRow( rowProcessingState ) );
+					rowProcessingState.finishRowProcessing( true );
 					readRows++;
 				}
 			}
 
-			try {
-				rowReader.finishUp( jdbcValuesSourceProcessingState );
-				jdbcValuesSourceProcessingState.finishUp( readRows > 1 );
-			}
-			finally {
-				persistenceContext.getLoadContexts().deregister( jdbcValuesSourceProcessingState );
-			}
+			rowReader.finishUp( rowProcessingState );
+			jdbcValuesSourceProcessingState.finishUp( readRows > 1 );
 
 			//noinspection unchecked
 			final ResultListTransformer<R> resultListTransformer =
@@ -231,6 +240,7 @@ public class ListResultsConsumer<R> implements ResultsConsumer<List<R>, R> {
 			try {
 				jdbcValues.finishUp( session );
 				persistenceContext.afterLoad();
+				persistenceContext.getLoadContexts().deregister( jdbcValuesSourceProcessingState );
 				persistenceContext.initializeNonLazyCollections();
 			}
 			catch (RuntimeException e) {
@@ -252,20 +262,35 @@ public class ListResultsConsumer<R> implements ResultsConsumer<List<R>, R> {
 
 	private JavaType<R> resolveDomainResultJavaType(
 			Class<R> domainResultResultJavaType,
-			List<JavaType<?>> resultJavaTypes,
+			List<@Nullable JavaType<?>> resultJavaTypes,
 			TypeConfiguration typeConfiguration) {
 		final JavaTypeRegistry javaTypeRegistry = typeConfiguration.getJavaTypeRegistry();
 
 		if ( domainResultResultJavaType != null ) {
-			return javaTypeRegistry.resolveDescriptor( domainResultResultJavaType );
+			final JavaType<R> resultJavaType = javaTypeRegistry.resolveDescriptor( domainResultResultJavaType );
+			// Could be that the user requested a more general type than the actual type,
+			// so resolve the most concrete type since this type is used to determine equality of objects
+			if ( resultJavaTypes.size() == 1 && isMoreConcrete( resultJavaType, resultJavaTypes.get( 0 ) ) ) {
+				//noinspection unchecked
+				return (JavaType<R>) resultJavaTypes.get( 0 );
+			}
+			return resultJavaType;
 		}
 
 		if ( resultJavaTypes.size() == 1 ) {
+			final JavaType<?> firstJavaType = resultJavaTypes.get( 0 );
+			if ( firstJavaType == null ) {
+				return javaTypeRegistry.resolveDescriptor( Object.class );
+			}
 			//noinspection unchecked
-			return (JavaType<R>) resultJavaTypes.get( 0 );
+			return (JavaType<R>) firstJavaType;
 		}
 
 		return javaTypeRegistry.resolveDescriptor( Object[].class );
+	}
+
+	private static boolean isMoreConcrete(JavaType<?> resultJavaType, @Nullable JavaType<?> javaType) {
+		return javaType != null && resultJavaType.getJavaTypeClass().isAssignableFrom( javaType.getJavaTypeClass() );
 	}
 
 	@Override

@@ -69,8 +69,9 @@ import org.hibernate.tool.schema.extract.internal.SequenceInformationExtractorH2
 import org.hibernate.tool.schema.extract.internal.SequenceInformationExtractorLegacyImpl;
 import org.hibernate.tool.schema.extract.internal.SequenceInformationExtractorNoOpImpl;
 import org.hibernate.tool.schema.extract.spi.SequenceInformationExtractor;
-import org.hibernate.type.descriptor.jdbc.H2FormatJsonJdbcType;
+import org.hibernate.type.descriptor.jdbc.EnumJdbcType;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
+import org.hibernate.type.descriptor.jdbc.OrdinalEnumJdbcType;
 import org.hibernate.type.descriptor.jdbc.TimeAsTimestampWithTimeZoneJdbcType;
 import org.hibernate.type.descriptor.jdbc.TimeUtcAsJdbcTimeJdbcType;
 import org.hibernate.type.descriptor.jdbc.TimeUtcAsOffsetTimeJdbcType;
@@ -78,6 +79,8 @@ import org.hibernate.type.descriptor.jdbc.TimestampUtcAsInstantJdbcType;
 import org.hibernate.type.descriptor.jdbc.UUIDJdbcType;
 import org.hibernate.type.descriptor.jdbc.spi.JdbcTypeRegistry;
 import org.hibernate.type.descriptor.sql.internal.DdlTypeImpl;
+import org.hibernate.type.descriptor.sql.internal.NativeEnumDdlTypeImpl;
+import org.hibernate.type.descriptor.sql.internal.NativeOrdinalEnumDdlTypeImpl;
 import org.hibernate.type.descriptor.sql.spi.DdlTypeRegistry;
 import org.hibernate.type.spi.TypeConfiguration;
 
@@ -117,6 +120,7 @@ import static org.hibernate.type.descriptor.DateTimeUtils.appendAsTimestampWithN
  * A legacy {@linkplain Dialect SQL dialect} for H2.
  *
  * @author Thomas Mueller
+ * @author Jürgen Kreitler
  */
 public class H2LegacyDialect extends Dialect {
 	private static final CoreMessageLogger LOG = CoreLogging.messageLogger( H2LegacyDialect.class );
@@ -262,6 +266,8 @@ public class H2LegacyDialect extends Dialect {
 				ddlTypeRegistry.addDescriptor( new DdlTypeImpl( JSON, "json", this ) );
 			}
 		}
+		ddlTypeRegistry.addDescriptor( new NativeEnumDdlTypeImpl( this ) );
+		ddlTypeRegistry.addDescriptor( new NativeOrdinalEnumDdlTypeImpl( this ) );
 	}
 
 	@Override
@@ -287,8 +293,10 @@ public class H2LegacyDialect extends Dialect {
 			jdbcTypeRegistry.addDescriptorIfAbsent( H2DurationIntervalSecondJdbcType.INSTANCE );
 		}
 		if ( getVersion().isSameOrAfter( 1, 4, 200 ) ) {
-			jdbcTypeRegistry.addDescriptorIfAbsent( H2FormatJsonJdbcType.INSTANCE );
+			jdbcTypeRegistry.addDescriptorIfAbsent( H2JsonJdbcType.INSTANCE );
 		}
+		jdbcTypeRegistry.addDescriptor( EnumJdbcType.INSTANCE );
+		jdbcTypeRegistry.addDescriptor( OrdinalEnumJdbcType.INSTANCE );
 	}
 
 	@Override
@@ -324,6 +332,7 @@ public class H2LegacyDialect extends Dialect {
 		functionFactory.bitand();
 		functionFactory.bitor();
 		functionFactory.bitxor();
+		functionFactory.bitnot();
 		functionFactory.bitAndOr();
 		functionFactory.yearMonthDay();
 		functionFactory.hourMinuteSecond();
@@ -379,7 +388,7 @@ public class H2LegacyDialect extends Dialect {
 				functionFactory.arrayPrepend_operator();
 				functionFactory.arrayAppend_operator();
 				functionFactory.arrayContains_h2( getMaximumArraySize() );
-				functionFactory.arrayOverlaps_h2( getMaximumArraySize() );
+				functionFactory.arrayIntersects_h2( getMaximumArraySize() );
 				functionFactory.arrayGet_h2();
 				functionFactory.arraySet_h2( getMaximumArraySize() );
 				functionFactory.arrayRemove_h2( getMaximumArraySize() );
@@ -776,8 +785,19 @@ public class H2LegacyDialect extends Dialect {
 	public SQLExceptionConversionDelegate buildSQLExceptionConversionDelegate() {
 		return (sqlException, message, sql) -> {
 			final int errorCode = JdbcExceptionHelper.extractErrorCode( sqlException );
+			final String constraintName;
 
 			switch (errorCode) {
+				case 23505:
+					// Unique constraint violation
+					constraintName = getViolatedConstraintNameExtractor().extractConstraintName(sqlException);
+					return new ConstraintViolationException(
+							message,
+							sqlException,
+							sql,
+							ConstraintViolationException.ConstraintKind.UNIQUE,
+							constraintName
+					);
 				case 40001:
 					// DEADLOCK DETECTED
 					return new LockAcquisitionException(message, sqlException, sql);
@@ -786,7 +806,7 @@ public class H2LegacyDialect extends Dialect {
 					return new PessimisticLockException(message, sqlException, sql);
 				case 90006:
 					// NULL not allowed for column [90006-145]
-					final String constraintName = getViolatedConstraintNameExtractor().extractConstraintName(sqlException);
+					constraintName = getViolatedConstraintNameExtractor().extractConstraintName(sqlException);
 					return new ConstraintViolationException(message, sqlException, sql, constraintName);
 				case 57014:
 					return new QueryTimeoutException( message, sqlException, sql );
@@ -922,6 +942,18 @@ public class H2LegacyDialect extends Dialect {
 	}
 
 	@Override
+	public String getEnumTypeDeclaration(String name, String[] values) {
+		StringBuilder type = new StringBuilder();
+		type.append( "enum (" );
+		String separator = "";
+		for ( String value : values ) {
+			type.append( separator ).append('\'').append( value ).append('\'');
+			separator = ",";
+		}
+		return type.append( ')' ).toString();
+	}
+
+	@Override
 	public String getDisableConstraintsStatement() {
 		return "set referential_integrity false";
 	}
@@ -939,5 +971,25 @@ public class H2LegacyDialect extends Dialect {
 	@Override
 	public int rowIdSqlType() {
 		return BIGINT;
+	}
+
+	@Override
+	public DmlTargetColumnQualifierSupport getDmlTargetColumnQualifierSupport() {
+		return DmlTargetColumnQualifierSupport.TABLE_ALIAS;
+	}
+
+	@Override
+	public String getCaseInsensitiveLike() {
+		if ( getVersion().isSameOrAfter( 1, 4, 194 ) ) {
+			return "ilike";
+		}
+		else {
+			return super.getCaseInsensitiveLike();
+		}
+	}
+
+	@Override
+	public boolean supportsCaseInsensitiveLike() {
+		return getVersion().isSameOrAfter( 1, 4, 194 );
 	}
 }

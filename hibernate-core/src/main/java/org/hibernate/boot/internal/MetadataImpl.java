@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 import org.hibernate.HibernateException;
@@ -58,8 +59,9 @@ import org.hibernate.mapping.PersistentClass;
 import org.hibernate.mapping.PrimaryKey;
 import org.hibernate.mapping.Property;
 import org.hibernate.mapping.Table;
-import org.hibernate.mapping.UniqueKey;
+import org.hibernate.mapping.UserDefinedObjectType;
 import org.hibernate.mapping.UserDefinedType;
+import org.hibernate.metamodel.mapping.DiscriminatorType;
 import org.hibernate.procedure.spi.NamedCallableQueryMemento;
 import org.hibernate.query.internal.NamedObjectRepositoryImpl;
 import org.hibernate.query.named.NamedObjectRepository;
@@ -82,7 +84,7 @@ import static org.hibernate.cfg.AvailableSettings.EVENT_LISTENER_PREFIX;
  * @author Gail Badner
  */
 public class MetadataImpl implements MetadataImplementor, Serializable {
-	private static final Pattern LISTENER_SEPARATION_PATTERN = Pattern.compile( " ," );
+	private static final Pattern LISTENER_SEPARATION_PATTERN = Pattern.compile( "\\s*,\\s*" );
 
 	private final UUID uuid;
 	private final MetadataBuildingOptions metadataBuildingOptions;
@@ -91,6 +93,7 @@ public class MetadataImpl implements MetadataImplementor, Serializable {
 	private final Map<String,PersistentClass> entityBindingMap;
 	private final List<Component> composites;
 	private final Map<Class<?>, Component> genericComponentsMap;
+	private final Map<Class<?>, DiscriminatorType<?>> embeddableDiscriminatorTypesMap;
 	private final Map<Class<?>, MappedSuperclass> mappedSuperclassMap;
 	private final Map<String,Collection> collectionBindingMap;
 	private final Map<String, TypeDefinition> typeDefinitionMap;
@@ -112,6 +115,7 @@ public class MetadataImpl implements MetadataImplementor, Serializable {
 			Map<String, PersistentClass> entityBindingMap,
 			List<Component> composites,
 			Map<Class<?>, Component> genericComponentsMap,
+			Map<Class<?>, DiscriminatorType<?>> embeddableDiscriminatorTypesMap,
 			Map<Class<?>, MappedSuperclass> mappedSuperclassMap,
 			Map<String, Collection> collectionBindingMap,
 			Map<String, TypeDefinition> typeDefinitionMap,
@@ -132,6 +136,7 @@ public class MetadataImpl implements MetadataImplementor, Serializable {
 		this.entityBindingMap = entityBindingMap;
 		this.composites = composites;
 		this.genericComponentsMap = genericComponentsMap;
+		this.embeddableDiscriminatorTypesMap = embeddableDiscriminatorTypesMap;
 		this.mappedSuperclassMap = mappedSuperclassMap;
 		this.collectionBindingMap = collectionBindingMap;
 		this.typeDefinitionMap = typeDefinitionMap;
@@ -166,10 +171,10 @@ public class MetadataImpl implements MetadataImplementor, Serializable {
 
 	@Override
 	public SessionFactoryBuilder getSessionFactoryBuilder() {
-		final SessionFactoryBuilderService factoryBuilderService = metadataBuildingOptions.getServiceRegistry().getService( SessionFactoryBuilderService.class );
+		final SessionFactoryBuilderService factoryBuilderService = metadataBuildingOptions.getServiceRegistry().requireService( SessionFactoryBuilderService.class );
 		final SessionFactoryBuilderImplementor defaultBuilder = factoryBuilderService.createSessionFactoryBuilder( this, bootstrapContext );
 
-		final ClassLoaderService cls = metadataBuildingOptions.getServiceRegistry().getService( ClassLoaderService.class );
+		final ClassLoaderService cls = metadataBuildingOptions.getServiceRegistry().requireService( ClassLoaderService.class );
 		final java.util.Collection<SessionFactoryBuilderFactory> discoveredBuilderFactories = cls.loadJavaServices( SessionFactoryBuilderFactory.class );
 
 		SessionFactoryBuilder builder = null;
@@ -449,13 +454,16 @@ public class MetadataImpl implements MetadataImplementor, Serializable {
 				}
 			}
 			for ( UserDefinedType userDefinedType : namespace.getUserDefinedTypes() ) {
-				if ( userDefinedType.getColumns().size() > 1 ) {
-					final List<Column> userDefinedTypeColumns = columnOrderingStrategy.orderUserDefinedTypeColumns(
-							userDefinedType,
-							this
-					);
-					if ( userDefinedTypeColumns != null ) {
-						userDefinedType.reorderColumns( userDefinedTypeColumns );
+				if ( userDefinedType instanceof UserDefinedObjectType ) {
+					final UserDefinedObjectType objectType = (UserDefinedObjectType) userDefinedType;
+					if ( objectType.getColumns().size() > 1 ) {
+						final List<Column> objectTypeColumns = columnOrderingStrategy.orderUserDefinedTypeColumns(
+								objectType,
+								this
+						);
+						if ( objectTypeColumns != null ) {
+							objectType.reorderColumns( objectTypeColumns );
+						}
 					}
 				}
 			}
@@ -464,7 +472,7 @@ public class MetadataImpl implements MetadataImplementor, Serializable {
 
 	private boolean shouldOrderTableColumns() {
 		final ConfigurationService configurationService = metadataBuildingOptions.getServiceRegistry()
-				.getService( ConfigurationService.class );
+				.requireService( ConfigurationService.class );
 		final Set<SchemaManagementToolCoordinator.ActionGrouping> groupings = SchemaManagementToolCoordinator.ActionGrouping.interpret(
 				this,
 				configurationService.getSettings()
@@ -515,9 +523,9 @@ public class MetadataImpl implements MetadataImplementor, Serializable {
 
 		assert sessionFactoryServiceRegistry != null;
 
-		final EventListenerRegistry eventListenerRegistry = sessionFactoryServiceRegistry.getService( EventListenerRegistry.class );
-		final ConfigurationService cfgService = sessionFactoryServiceRegistry.getService( ConfigurationService.class );
-		final ClassLoaderService classLoaderService = sessionFactoryServiceRegistry.getService( ClassLoaderService.class );
+		final EventListenerRegistry eventListenerRegistry = sessionFactoryServiceRegistry.requireService( EventListenerRegistry.class );
+		final ConfigurationService cfgService = sessionFactoryServiceRegistry.requireService( ConfigurationService.class );
+		final ClassLoaderService classLoaderService = sessionFactoryServiceRegistry.requireService( ClassLoaderService.class );
 
 		for ( Map.Entry<String,Object> entry : cfgService.getSettings().entrySet() ) {
 			final String propertyName = entry.getKey();
@@ -564,6 +572,13 @@ public class MetadataImpl implements MetadataImplementor, Serializable {
 	@Override
 	public Component getGenericComponent(Class<?> componentClass) {
 		return genericComponentsMap.get( componentClass );
+	}
+
+	@Override
+	public DiscriminatorType<?> resolveEmbeddableDiscriminatorType(
+			Class<?> embeddableClass,
+			Supplier<DiscriminatorType<?>> supplier) {
+		return embeddableDiscriminatorTypesMap.computeIfAbsent( embeddableClass, k -> supplier.get() );
 	}
 
 	@Override
@@ -661,4 +676,7 @@ public class MetadataImpl implements MetadataImplementor, Serializable {
 		return genericComponentsMap;
 	}
 
+	public Map<Class<?>, DiscriminatorType<?>> getEmbeddableDiscriminatorTypesMap() {
+		return embeddableDiscriminatorTypesMap;
+	}
 }

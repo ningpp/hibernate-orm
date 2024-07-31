@@ -6,16 +6,20 @@
  */
 package org.hibernate.metamodel.mapping.internal;
 
-import java.io.Serializable;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.BiConsumer;
 import java.util.function.IntFunction;
 
+import org.hibernate.Hibernate;
+import org.hibernate.bytecode.enhance.spi.interceptor.EnhancementAsProxyLazinessInterceptor;
 import org.hibernate.cache.MutableCacheKeyBuilder;
 import org.hibernate.engine.FetchStyle;
 import org.hibernate.engine.FetchTiming;
+import org.hibernate.engine.internal.CacheHelper;
+import org.hibernate.engine.internal.ManagedTypeHelper;
+import org.hibernate.engine.spi.PersistentAttributeInterceptor;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.util.IndexedConsumer;
 import org.hibernate.metamodel.mapping.AssociationKey;
@@ -57,8 +61,9 @@ import org.hibernate.sql.results.graph.Fetch;
 import org.hibernate.sql.results.graph.FetchOptions;
 import org.hibernate.sql.results.graph.FetchParent;
 import org.hibernate.sql.results.graph.basic.BasicResult;
-import org.hibernate.type.descriptor.converter.spi.BasicValueConverter;
 import org.hibernate.type.descriptor.java.JavaType;
+
+import static org.hibernate.engine.internal.ManagedTypeHelper.asPersistentAttributeInterceptable;
 
 /**
  * @author Steve Ebersole
@@ -162,6 +167,17 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 		);
 	}
 
+	/*
+	 * Used by Hibernate Reactive
+	 */
+	protected SimpleForeignKeyDescriptor(SimpleForeignKeyDescriptor original) {
+		keySide = original.keySide;
+		targetSide = original.targetSide;
+		refersToPrimaryKey = original.refersToPrimaryKey;
+		hasConstraint = original.hasConstraint;
+		associationKey = original.associationKey;
+	}
+
 	@Override
 	public String getKeyTable() {
 		return keySide.getModelPart().getContainingTableExpression();
@@ -227,7 +243,7 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 	public ForeignKeyDescriptor withTargetPart(ValuedModelPart targetPart) {
 		return new SimpleForeignKeyDescriptor(
 				keySide.getModelPart(),
-				(BasicValuedModelPart) targetPart,
+				targetPart.asBasicValuedModelPart(),
 				refersToPrimaryKey,
 				hasConstraint,
 				false
@@ -379,8 +395,10 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 				sqlSelection.getValuesArrayPosition(),
 				null,
 				selectableMapping.getJdbcMapping(),
+				navigablePath,
 				// if the expression type is different that the expected type coerce the value
-				selectionType != null && selectionType.getSingleJdbcMapping().getJdbcJavaType() != javaType
+				selectionType != null && selectionType.getSingleJdbcMapping().getJdbcJavaType() != javaType,
+				!sqlSelection.isVirtual()
 		);
 	}
 
@@ -468,27 +486,7 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 
 	@Override
 	public void addToCacheKey(MutableCacheKeyBuilder cacheKey, Object value, SharedSessionContractImplementor session) {
-		if ( value == null ) {
-			return;
-		}
-		final JdbcMapping jdbcMapping = getJdbcMapping();
-		final BasicValueConverter converter = jdbcMapping.getValueConverter();
-		final Serializable disassemble;
-		final int hashCode;
-		if ( converter == null ) {
-			final JavaType javaTypeDescriptor = jdbcMapping.getJavaTypeDescriptor();
-			disassemble = javaTypeDescriptor.getMutabilityPlan().disassemble( value, session );
-			hashCode = javaTypeDescriptor.extractHashCode( disassemble );
-		}
-		else {
-			final Object relationalValue = converter.toRelationalValue( value );
-			final JavaType relationalJavaType = converter.getRelationalJavaType();
-			disassemble = relationalJavaType.getMutabilityPlan().disassemble( relationalValue, session );
-			hashCode = relationalJavaType.extractHashCode( relationalValue );
-		}
-
-		cacheKey.addValue( disassemble );
-		cacheKey.addHashCode( hashCode );
+		CacheHelper.addBasicValueToCacheKey( cacheKey, value, getJdbcMapping(), session );
 	}
 
 	@Override
@@ -499,16 +497,28 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 		if ( targetObject == null ) {
 			return null;
 		}
-		if ( refersToPrimaryKey ) {
-			final LazyInitializer lazyInitializer = HibernateProxy.extractLazyInitializer( targetObject );
-			if ( lazyInitializer != null ) {
+		final LazyInitializer lazyInitializer = HibernateProxy.extractLazyInitializer( targetObject );
+		if ( lazyInitializer != null ) {
+			if ( refersToPrimaryKey ) {
 				return lazyInitializer.getIdentifier();
+			}
+			else {
+				targetObject = lazyInitializer.getImplementation();
 			}
 		}
 		final ModelPart modelPart = side.getModelPart();
 		if ( modelPart.isEntityIdentifierMapping() ) {
 			return ( (EntityIdentifierMapping) modelPart ).getIdentifierIfNotUnsaved( targetObject, session );
 		}
+
+		if ( lazyInitializer == null && ManagedTypeHelper.isPersistentAttributeInterceptable( targetObject ) ) {
+			final PersistentAttributeInterceptor interceptor =
+					asPersistentAttributeInterceptable( targetObject ).$$_hibernate_getInterceptor();
+			if ( interceptor instanceof EnhancementAsProxyLazinessInterceptor && !( (EnhancementAsProxyLazinessInterceptor) interceptor ).isInitialized() ) {
+				Hibernate.initialize( targetObject );
+			}
+		}
+
 		return ( (PropertyBasedMapping) modelPart ).getPropertyAccess().getGetter().get( targetObject );
 	}
 
@@ -661,6 +671,11 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 	@Override
 	public Integer getScale() {
 		return keySide.getModelPart().getScale();
+	}
+
+	@Override
+	public Integer getTemporalPrecision() {
+		return keySide.getModelPart().getTemporalPrecision();
 	}
 
 	@Override

@@ -196,12 +196,12 @@ public class ServiceRegistryExtension
 			ssrb.applySetting( PersistentTableStrategy.DROP_ID_TABLES, "true" );
 			ssrb.applySetting( GlobalTemporaryTableMutationStrategy.DROP_ID_TABLES, "true" );
 			ssrb.applySetting( LocalTemporaryTableMutationStrategy.DROP_ID_TABLES, "true" );
-			ServiceRegistryUtil.applySettings( ssrb.getSettings() );
 
 			if ( ssrAnnRef.isPresent() ) {
 				final ServiceRegistry serviceRegistryAnn = ssrAnnRef.get();
 				configureServices( serviceRegistryAnn, ssrb );
 			}
+			ServiceRegistryUtil.applySettings( ssrb.getSettings() );
 
 			return ssrb.build();
 		}
@@ -334,6 +334,7 @@ public class ServiceRegistryExtension
 
 		private StandardServiceRegistry createRegistry() {
 			BootstrapServiceRegistryBuilder bsrb = new BootstrapServiceRegistryBuilder().enableAutoClose();
+			bsrb.applyClassLoader( Thread.currentThread().getContextClassLoader() );
 			ssrProducer.prepareBootstrapRegistryBuilder(bsrb);
 
 			final org.hibernate.boot.registry.BootstrapServiceRegistry bsr = bsrProducer.produceServiceRegistry( bsrb );

@@ -41,8 +41,8 @@ public class ByteCodeEnhancedImmutableReferenceCacheTest extends BaseCoreFunctio
 	@Override
 	protected void configure(Configuration configuration) {
 		super.configure( configuration );
-		configuration.setProperty( AvailableSettings.USE_DIRECT_REFERENCE_CACHE_ENTRIES, "true" );
-		configuration.setProperty( AvailableSettings.USE_QUERY_CACHE, "true" );
+		configuration.setProperty( AvailableSettings.USE_DIRECT_REFERENCE_CACHE_ENTRIES, true );
+		configuration.setProperty( AvailableSettings.USE_QUERY_CACHE, true );
 	}
 
 	@Override
@@ -310,5 +310,14 @@ public class ByteCodeEnhancedImmutableReferenceCacheTest extends BaseCoreFunctio
 			this.previous = previous;
 		}
 
+		@Override
+		public void $$_hibernate_setUseTracker(boolean useTracker) {
+
+		}
+
+		@Override
+		public boolean $$_hibernate_useTracker() {
+			return false;
+		}
 	}
 }

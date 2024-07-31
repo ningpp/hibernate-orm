@@ -34,6 +34,7 @@ import org.hibernate.generator.BeforeExecutionGenerator;
 import org.hibernate.generator.Generator;
 import org.hibernate.generator.GeneratorCreationContext;
 import org.hibernate.generator.OnExecutionGenerator;
+import org.hibernate.id.Configurable;
 import org.hibernate.id.IdentifierGenerator;
 import org.hibernate.id.PersistentIdentifierGenerator;
 import org.hibernate.id.factory.spi.CustomIdGeneratorCreationContext;
@@ -41,7 +42,9 @@ import org.hibernate.internal.CoreLogging;
 import org.hibernate.mapping.GeneratorCreator;
 import org.hibernate.mapping.IdentifierGeneratorCreator;
 import org.hibernate.mapping.SimpleValue;
-import org.hibernate.mapping.Table;
+import org.hibernate.mapping.Value;
+import org.hibernate.resource.beans.container.spi.BeanContainer;
+import org.hibernate.resource.beans.spi.BeanInstanceProducer;
 
 import org.jboss.logging.Logger;
 
@@ -55,6 +58,7 @@ import jakarta.persistence.Version;
 
 import static org.hibernate.boot.model.internal.BinderHelper.isCompositeId;
 import static org.hibernate.boot.model.internal.BinderHelper.isGlobalGeneratorNameGlobal;
+import static org.hibernate.id.factory.internal.IdentifierGeneratorUtil.collectParameters;
 import static org.hibernate.mapping.SimpleValue.DEFAULT_ID_GEN_STRATEGY;
 
 public class GeneratorBinder {
@@ -74,15 +78,13 @@ public class GeneratorBinder {
 			Map<String, IdentifierGeneratorDefinition> localGenerators) {
 		LOG.debugf( "#makeIdGenerator(%s, %s, %s, %s, ...)", id, property, generatorType, generatorName );
 
-		final Table table = id.getTable();
-		table.setIdentifierValue( id );
 		//generator settings
 		id.setIdentifierGeneratorStrategy( generatorType );
 
 		final Map<String,Object> parameters = new HashMap<>();
 
 		//always settable
-		parameters.put( PersistentIdentifierGenerator.TABLE, table.getName() );
+		parameters.put( PersistentIdentifierGenerator.TABLE, id.getTable().getName() );
 
 		if ( id.getColumnSpan() == 1 ) {
 			parameters.put( PersistentIdentifierGenerator.PK, id.getColumns().get(0).getName() );
@@ -111,7 +113,7 @@ public class GeneratorBinder {
 					|| identifierGeneratorStrategy.equals( "seqhilo" );
 			if ( generatorType == null || !avoidOverriding ) {
 				id.setIdentifierGeneratorStrategy( identifierGeneratorStrategy );
-				if ( identifierGeneratorStrategy.equals( "assigned" ) ) {
+				if ( DEFAULT_ID_GEN_STRATEGY.equals( identifierGeneratorStrategy ) ) {
 					id.setNullValue( "undefined" );
 				}
 			}
@@ -373,7 +375,10 @@ public class GeneratorBinder {
 		};
 	}
 
-	static IdentifierGeneratorCreator identifierGeneratorCreator(XProperty idProperty, Annotation annotation) {
+	static IdentifierGeneratorCreator identifierGeneratorCreator(
+			XProperty idProperty,
+			Annotation annotation,
+			BeanContainer beanContainer) {
 		final Member member = HCANNHelper.getUnderlyingMember( idProperty );
 		final Class<? extends Annotation> annotationType = annotation.annotationType();
 		final IdGeneratorType idGeneratorType = annotationType.getAnnotation( IdGeneratorType.class );
@@ -384,16 +389,85 @@ public class GeneratorBinder {
 			final Generator generator =
 					instantiateGenerator(
 							annotation,
-							member,
-							annotationType,
+							beanContainer,
 							creationContext,
-							CustomIdGeneratorCreationContext.class,
-							generatorClass
+							generatorClass,
+							member,
+							annotationType
 					);
 			callInitialize( annotation, member, creationContext, generator );
+			callConfigure( creationContext, generator );
 			checkIdGeneratorTiming( annotationType, generator );
 			return generator;
 		};
+	}
+
+	private static Generator instantiateGenerator(
+			Annotation annotation,
+			BeanContainer beanContainer,
+			CustomIdGeneratorCreationContext creationContext,
+			Class<? extends Generator> generatorClass,
+			Member member,
+			Class<? extends Annotation> annotationType) {
+		if ( beanContainer != null ) {
+			return instantiateGeneratorAsBean(
+					annotation,
+					beanContainer,
+					creationContext,
+					generatorClass,
+					member,
+					annotationType
+			);
+		}
+		else {
+			return instantiateGenerator(
+					annotation,
+					member,
+					annotationType,
+					creationContext,
+					CustomIdGeneratorCreationContext.class,
+					generatorClass
+			);
+		}
+	}
+
+	private static Generator instantiateGeneratorAsBean(
+			Annotation annotation,
+			BeanContainer beanContainer,
+			CustomIdGeneratorCreationContext creationContext,
+			Class<? extends Generator> generatorClass,
+			Member member,
+			Class<? extends Annotation> annotationType) {
+		return beanContainer.getBean( generatorClass,
+				new BeanContainer.LifecycleOptions() {
+					@Override
+					public boolean canUseCachedReferences() {
+						return false;
+					}
+					@Override
+					public boolean useJpaCompliantCreation() {
+						return true;
+					}
+				},
+				new BeanInstanceProducer() {
+					@SuppressWarnings( "unchecked" )
+					@Override
+					public <B> B produceBeanInstance(Class<B> beanType) {
+						return (B) instantiateGenerator(
+								annotation,
+								member,
+								annotationType,
+								creationContext,
+								CustomIdGeneratorCreationContext.class,
+								generatorClass
+						);
+					}
+					@Override
+					public <B> B produceBeanInstance(String name, Class<B> beanType) {
+						return produceBeanInstance( beanType );
+					}
+				} )
+				.getBeanInstance();
 	}
 
 	private static <C, G extends Generator> G instantiateGenerator(
@@ -433,7 +507,7 @@ public class GeneratorBinder {
 			Member member,
 			GeneratorCreationContext creationContext,
 			Generator generator) {
-		if ( generator instanceof AnnotationBasedGenerator) {
+		if ( generator instanceof AnnotationBasedGenerator ) {
 			// This will cause a CCE in case the generation type doesn't match the annotation type; As this would be
 			// a programming error of the generation type developer and thus should show up during testing, we don't
 			// check this explicitly; If required, this could be done e.g. using ClassMate
@@ -455,6 +529,19 @@ public class GeneratorBinder {
 						+ "' is annotated '@Version' but has a 'Generator' which does not generate on updates"
 				);
 			}
+		}
+	}
+
+	private static void callConfigure(GeneratorCreationContext creationContext, Generator generator) {
+		if ( generator instanceof Configurable ) {
+			final Value value = creationContext.getProperty().getValue();
+			( (Configurable) generator ).configure( value.getType(), collectParameters(
+					(SimpleValue) value,
+					creationContext.getDatabase().getDialect(),
+					creationContext.getDefaultCatalog(),
+					creationContext.getDefaultSchema(),
+					creationContext.getPersistentClass().getRootClass()
+			), creationContext.getServiceRegistry() );
 		}
 	}
 

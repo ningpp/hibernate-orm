@@ -19,6 +19,7 @@ import org.hibernate.engine.spi.CascadingAction;
 import org.hibernate.engine.spi.CollectionEntry;
 import org.hibernate.engine.spi.EntityEntry;
 import org.hibernate.engine.spi.PersistenceContext;
+import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.engine.spi.Status;
 import org.hibernate.event.spi.DeleteContext;
 import org.hibernate.event.spi.EventSource;
@@ -31,9 +32,12 @@ import org.hibernate.type.CollectionType;
 import org.hibernate.type.ComponentType;
 import org.hibernate.type.CompositeType;
 import org.hibernate.type.EntityType;
+import org.hibernate.type.ManyToOneType;
+import org.hibernate.type.OneToOneType;
 import org.hibernate.type.Type;
 
 import static org.hibernate.engine.internal.ManagedTypeHelper.isHibernateProxy;
+import static org.hibernate.engine.spi.CascadingActions.CHECK_ON_FLUSH;
 import static org.hibernate.pretty.MessageHelper.infoString;
 import static org.hibernate.type.ForeignKeyDirection.TO_PARENT;
 
@@ -80,16 +84,24 @@ public final class Cascade {
 			final EntityPersister persister,
 			final Object parent,
 			final T anything) throws HibernateException {
-		if ( persister.hasCascades() || action.requiresNoCascadeChecking() ) { // performance opt
+		if ( persister.hasCascades() || action == CHECK_ON_FLUSH ) { // performance opt
 			final boolean traceEnabled = LOG.isTraceEnabled();
 			if ( traceEnabled ) {
 				LOG.tracev( "Processing cascade {0} for: {1}", action, persister.getEntityName() );
 			}
 			final PersistenceContext persistenceContext = eventSource.getPersistenceContextInternal();
-			final EntityEntry entry = persistenceContext.getEntry( parent );
-			if ( entry != null && entry.getLoadedState() == null && entry.getStatus() == Status.MANAGED && persister.getBytecodeEnhancementMetadata()
-					.isEnhancedForLazyLoading() ) {
-				return;
+			final boolean enhancedForLazyLoading = persister.getBytecodeEnhancementMetadata().isEnhancedForLazyLoading();
+			final EntityEntry entry;
+			if ( enhancedForLazyLoading ) {
+				entry = persistenceContext.getEntry( parent );
+				if ( entry != null
+						&& entry.getLoadedState() == null
+						&& entry.getStatus() == Status.MANAGED ) {
+					return;
+				}
+			}
+			else {
+				entry = null;
 			}
 			final Type[] types = persister.getPropertyTypes();
 			final String[] propertyNames = persister.getPropertyNames();
@@ -99,14 +111,15 @@ public final class Cascade {
 			for ( int i = 0; i < types.length; i++) {
 				final CascadeStyle style = cascadeStyles[ i ];
 				final String propertyName = propertyNames[ i ];
+				final Type type = types[i];
 				final boolean isUninitializedProperty =
 						hasUninitializedLazyProperties &&
 						!persister.getBytecodeEnhancementMetadata().isAttributeLoaded( parent, propertyName );
 
-				final Type type = types[i];
 				if ( style.doCascade( action ) ) {
 					final Object child;
 					if ( isUninitializedProperty  ) {
+						assert enhancedForLazyLoading;
 						// parent is a bytecode enhanced entity.
 						// Cascade to an uninitialized, lazy value only if
 						// parent is managed in the PersistenceContext.
@@ -169,15 +182,6 @@ public final class Cascade {
 					);
 				}
 				else {
-					if ( action.requiresNoCascadeChecking() ) {
-						action.noCascade(
-								eventSource,
-								parent,
-								persister,
-								type,
-								i
-						);
-					}
 					// If the property is uninitialized, then there cannot be any orphans.
 					if ( action.deleteOrphans() && !isUninitializedProperty && isLogicalOneToOne( type ) ) {
 						cascadeLogicalOneToOneOrphanRemoval(
@@ -216,11 +220,14 @@ public final class Cascade {
 			final String propertyName,
 			final T anything,
 			final boolean isCascadeDeleteEnabled) throws HibernateException {
-		
+
 		if ( child != null ) {
 			if ( type.isAssociationType() ) {
 				final AssociationType associationType = (AssociationType) type;
-				if ( cascadeAssociationNow( cascadePoint, associationType ) ) {
+				final boolean unownedTransient = eventSource.getSessionFactory()
+						.getSessionFactoryOptions()
+						.isUnownedAssociationTransientCheck();
+				if ( cascadeAssociationNow( action, cascadePoint, associationType, eventSource.getFactory(), unownedTransient ) ) {
 					cascadeAssociation(
 							action,
 							cascadePoint,
@@ -378,11 +385,38 @@ public final class Cascade {
 	 * @return True if the attribute represents a logical one to one association
 	 */
 	private static boolean isLogicalOneToOne(Type type) {
-		return type.isEntityType() && ( (EntityType) type ).isLogicalOneToOne();
+		return type instanceof EntityType && ( (EntityType) type ).isLogicalOneToOne();
 	}
 
-	private static boolean cascadeAssociationNow(final CascadePoint cascadePoint, AssociationType associationType) {
-		return associationType.getForeignKeyDirection().cascadeNow( cascadePoint );
+	private static boolean cascadeAssociationNow(
+			CascadingAction<?> action,
+			CascadePoint cascadePoint,
+			AssociationType associationType,
+			SessionFactoryImplementor factory,
+			boolean unownedTransient) {
+		return associationType.getForeignKeyDirection().cascadeNow( cascadePoint )
+				// For check on flush, we should only check unowned associations when strictness is enforced
+				&& ( action != CHECK_ON_FLUSH || unownedTransient || !isUnownedAssociation( associationType, factory ) );
+	}
+
+	private static boolean isUnownedAssociation(AssociationType associationType, SessionFactoryImplementor factory) {
+		if ( associationType.isEntityType() ) {
+			if ( associationType instanceof ManyToOneType ) {
+				final ManyToOneType manyToOne = (ManyToOneType) associationType;
+				// logical one-to-one + non-null unique key property name indicates unowned
+				return manyToOne.isLogicalOneToOne() && manyToOne.getRHSUniqueKeyPropertyName() != null;
+			}
+			else if ( associationType instanceof OneToOneType ) {
+				final OneToOneType oneToOne = (OneToOneType) associationType;
+				// constrained false + non-null unique key property name indicates unowned
+				return oneToOne.isNullable() && oneToOne.getRHSUniqueKeyPropertyName() != null;
+			}
+		}
+		else if ( associationType.isCollectionType() ) {
+			// for collections, we can ask the persister if we're on the inverse side
+			return ( (CollectionType) associationType ).isInverse( factory );
+		}
+		return false;
 	}
 
 	private static <T> void cascadeComponent(
@@ -394,7 +428,6 @@ public final class Cascade {
 			final Object child,
 			final CompositeType componentType,
 			final T anything) {
-
 		Object[] children = null;
 		final Type[] types = componentType.getSubtypes();
 		final String[] propertyNames = componentType.getPropertyNames();

@@ -8,8 +8,8 @@ package org.hibernate.query.sqm.spi;
 
 import java.util.List;
 
+import org.hibernate.metamodel.model.domain.DiscriminatorSqmPath;
 import org.hibernate.metamodel.model.domain.internal.AnyDiscriminatorSqmPath;
-import org.hibernate.metamodel.model.domain.internal.EntityDiscriminatorSqmPath;
 import org.hibernate.query.sqm.InterpretationException;
 import org.hibernate.query.sqm.SemanticQueryWalker;
 import org.hibernate.query.sqm.tree.SqmVisitableNode;
@@ -25,6 +25,7 @@ import org.hibernate.query.sqm.tree.domain.SqmDerivedRoot;
 import org.hibernate.query.sqm.tree.domain.SqmEmbeddedValuedSimplePath;
 import org.hibernate.query.sqm.tree.domain.SqmEntityValuedSimplePath;
 import org.hibernate.query.sqm.tree.domain.SqmFkExpression;
+import org.hibernate.query.sqm.tree.domain.SqmFunctionPath;
 import org.hibernate.query.sqm.tree.domain.SqmIndexedCollectionAccessPath;
 import org.hibernate.query.sqm.tree.domain.SqmMapEntryReference;
 import org.hibernate.query.sqm.tree.domain.SqmElementAggregateFunction;
@@ -56,6 +57,7 @@ import org.hibernate.query.sqm.tree.expression.SqmFormat;
 import org.hibernate.query.sqm.tree.expression.SqmFunction;
 import org.hibernate.query.sqm.tree.expression.SqmHqlNumericLiteral;
 import org.hibernate.query.sqm.tree.expression.SqmLiteral;
+import org.hibernate.query.sqm.tree.expression.SqmLiteralEmbeddableType;
 import org.hibernate.query.sqm.tree.expression.SqmLiteralEntityType;
 import org.hibernate.query.sqm.tree.expression.SqmModifiedSubQueryExpression;
 import org.hibernate.query.sqm.tree.expression.SqmNamedParameter;
@@ -80,6 +82,8 @@ import org.hibernate.query.sqm.tree.from.SqmFrom;
 import org.hibernate.query.sqm.tree.from.SqmFromClause;
 import org.hibernate.query.sqm.tree.from.SqmJoin;
 import org.hibernate.query.sqm.tree.from.SqmRoot;
+import org.hibernate.query.sqm.tree.insert.SqmConflictClause;
+import org.hibernate.query.sqm.tree.insert.SqmConflictUpdateAction;
 import org.hibernate.query.sqm.tree.insert.SqmInsertSelectStatement;
 import org.hibernate.query.sqm.tree.insert.SqmInsertValuesStatement;
 import org.hibernate.query.sqm.tree.insert.SqmValues;
@@ -115,8 +119,6 @@ import org.hibernate.query.sqm.tree.select.SqmSubQuery;
 import org.hibernate.query.sqm.tree.update.SqmAssignment;
 import org.hibernate.query.sqm.tree.update.SqmSetClause;
 import org.hibernate.query.sqm.tree.update.SqmUpdateStatement;
-import org.hibernate.sql.ast.spi.SqlAstQueryPartProcessingState;
-import org.hibernate.sql.ast.tree.from.TableGroup;
 
 /**
  * Base support for an SQM walker
@@ -166,6 +168,10 @@ public abstract class BaseSemanticQueryWalker implements SemanticQueryWalker<Obj
 			stateField.accept( this );
 		}
 		statement.getSelectQueryPart().accept( this );
+		final SqmConflictClause<?> conflictClause = statement.getConflictClause();
+		if ( conflictClause != null ) {
+			visitConflictClause( conflictClause );
+		}
 		return statement;
 	}
 
@@ -179,7 +185,27 @@ public abstract class BaseSemanticQueryWalker implements SemanticQueryWalker<Obj
 		for ( SqmValues sqmValues : statement.getValuesList() ) {
 			visitValues( sqmValues );
 		}
+		final SqmConflictClause<?> conflictClause = statement.getConflictClause();
+		if ( conflictClause != null ) {
+			visitConflictClause( conflictClause );
+		}
 		return statement;
+	}
+
+	@Override
+	public Object visitConflictClause(SqmConflictClause<?> sqmConflictClause) {
+		final SqmConflictUpdateAction<?> updateAction = sqmConflictClause.getConflictAction();
+		for ( SqmPath<?> stateField : sqmConflictClause.getConstraintPaths() ) {
+			stateField.accept( this );
+		}
+		if ( updateAction != null ) {
+			visitSetClause( updateAction.getSetClause() );
+			final SqmWhereClause whereClause = updateAction.getWhereClause();
+			if ( whereClause != null ) {
+				visitWhereClause( whereClause );
+			}
+		}
+		return sqmConflictClause;
 	}
 
 	@Override
@@ -443,7 +469,7 @@ public abstract class BaseSemanticQueryWalker implements SemanticQueryWalker<Obj
 	}
 
 	@Override
-	public Object visitDiscriminatorPath(EntityDiscriminatorSqmPath path) {
+	public Object visitDiscriminatorPath(DiscriminatorSqmPath<?> path) {
 		return path;
 	}
 
@@ -460,6 +486,12 @@ public abstract class BaseSemanticQueryWalker implements SemanticQueryWalker<Obj
 	@Override
 	public Object visitIndexAggregateFunction(SqmIndexAggregateFunction<?> path) {
 		return path;
+	}
+
+	@Override
+	public Object visitFunctionPath(SqmFunctionPath<?> functionPath) {
+		visitFunction( functionPath.getFunction() );
+		return functionPath;
 	}
 
 	@Override
@@ -689,6 +721,11 @@ public abstract class BaseSemanticQueryWalker implements SemanticQueryWalker<Obj
 	}
 
 	@Override
+	public Object visitEmbeddableTypeLiteralExpression(SqmLiteralEmbeddableType<?> expression) {
+		return expression;
+	}
+
+	@Override
 	public Object visitAnyDiscriminatorTypeExpression(AnyDiscriminatorSqmPath<?> expression) {
 		return expression;
 	}
@@ -874,6 +911,7 @@ public abstract class BaseSemanticQueryWalker implements SemanticQueryWalker<Obj
 
 	@Override
 	public Object visitSubQueryExpression(SqmSubQuery<?> expression) {
+		visitCteContainer( expression );
 		expression.getQueryPart().accept( this );
 		return expression;
 	}

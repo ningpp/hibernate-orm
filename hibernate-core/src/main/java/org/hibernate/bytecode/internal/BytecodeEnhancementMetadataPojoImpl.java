@@ -16,7 +16,10 @@ import org.hibernate.bytecode.enhance.spi.interceptor.LazyAttributeLoadingInterc
 import org.hibernate.bytecode.enhance.spi.interceptor.LazyAttributesMetadata;
 import org.hibernate.bytecode.spi.BytecodeEnhancementMetadata;
 import org.hibernate.bytecode.spi.NotInstrumentedException;
+import org.hibernate.engine.spi.EntityEntry;
+import org.hibernate.engine.spi.EntityHolder;
 import org.hibernate.engine.spi.EntityKey;
+import org.hibernate.engine.spi.ManagedEntity;
 import org.hibernate.engine.spi.PersistenceContext;
 import org.hibernate.engine.spi.PersistentAttributeInterceptable;
 import org.hibernate.engine.spi.PersistentAttributeInterceptor;
@@ -31,6 +34,7 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 
 import static org.hibernate.engine.internal.ManagedTypeHelper.asPersistentAttributeInterceptable;
 import static org.hibernate.engine.internal.ManagedTypeHelper.isPersistentAttributeInterceptableType;
+import static org.hibernate.engine.internal.ManagedTypeHelper.processIfManagedEntity;
 import static org.hibernate.engine.internal.ManagedTypeHelper.processIfSelfDirtinessTracker;
 
 /**
@@ -153,12 +157,15 @@ public final class BytecodeEnhancementMetadataPojoImpl implements BytecodeEnhanc
 
 		// clear the fields that are marked as dirty in the dirtiness tracker
 		processIfSelfDirtinessTracker( entity, BytecodeEnhancementMetadataPojoImpl::clearDirtyAttributes );
+		processIfManagedEntity( entity, BytecodeEnhancementMetadataPojoImpl::useTracker );
+
 		// add the entity (proxy) instance to the PC
 		persistenceContext.addEnhancedProxy( entityKey, entity );
 
 		// if requested, add the "holder entry" to the PC
 		if ( addEmptyEntry ) {
-			persistenceContext.addEntry(
+			EntityHolder entityHolder = persistenceContext.getEntityHolder( entityKey );
+			EntityEntry entityEntry = persistenceContext.addEntry(
 					entity,
 					Status.MANAGED,
 					// loaded state
@@ -174,6 +181,7 @@ public final class BytecodeEnhancementMetadataPojoImpl implements BytecodeEnhanc
 					persister,
 					true
 			);
+			entityHolder.setEntityEntry( entityEntry );
 		}
 
 		// inject the interceptor
@@ -186,6 +194,10 @@ public final class BytecodeEnhancementMetadataPojoImpl implements BytecodeEnhanc
 
 	private static void clearDirtyAttributes(final SelfDirtinessTracker entity) {
 		entity.$$_hibernate_clearDirtyAttributes();
+	}
+
+	private static void useTracker(final ManagedEntity entity) {
+		entity.$$_hibernate_setUseTracker( true );
 	}
 
 	@Override

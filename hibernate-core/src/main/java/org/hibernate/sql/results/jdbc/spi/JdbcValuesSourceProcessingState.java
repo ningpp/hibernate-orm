@@ -6,7 +6,10 @@
  */
 package org.hibernate.sql.results.jdbc.spi;
 
+import java.util.List;
+
 import org.hibernate.engine.spi.CollectionKey;
+import org.hibernate.engine.spi.EntityHolder;
 import org.hibernate.engine.spi.EntityUniqueKey;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.event.spi.PostLoadEvent;
@@ -39,12 +42,13 @@ public interface JdbcValuesSourceProcessingState {
 	PreLoadEvent getPreLoadEvent();
 	PostLoadEvent getPostLoadEvent();
 
-	void registerInitializer(
-			EntityUniqueKey entityKey,
-			Initializer initializer);
+	void registerLoadingEntityHolder(EntityHolder holder);
 
-	Initializer findInitializer(EntityUniqueKey entityKey);
+	List<EntityHolder> getLoadingEntityHolders();
 
+	void registerReloadedEntityHolder(EntityHolder holder);
+
+	List<EntityHolder> getReloadedEntityHolders();
 
 	/**
 	 * Find a LoadingCollectionEntry locally to this context.

@@ -6,11 +6,11 @@
  */
 package org.hibernate.sql.exec.internal;
 
-import java.io.Serializable;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 
 import org.hibernate.cache.MutableCacheKeyBuilder;
+import org.hibernate.engine.internal.CacheHelper;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.util.IndexedConsumer;
 import org.hibernate.metamodel.mapping.BasicValuedMapping;
@@ -21,20 +21,15 @@ import org.hibernate.metamodel.mapping.SqlExpressible;
 import org.hibernate.metamodel.model.domain.internal.BasicTypeImpl;
 import org.hibernate.query.BindableType;
 import org.hibernate.sql.ast.SqlAstWalker;
-import org.hibernate.sql.ast.spi.SqlSelection;
 import org.hibernate.sql.ast.tree.expression.JdbcParameter;
 import org.hibernate.sql.exec.ExecutionException;
 import org.hibernate.sql.exec.spi.ExecutionContext;
 import org.hibernate.sql.exec.spi.JdbcParameterBinder;
 import org.hibernate.sql.exec.spi.JdbcParameterBinding;
 import org.hibernate.sql.exec.spi.JdbcParameterBindings;
-import org.hibernate.sql.results.internal.SqlSelectionImpl;
-import org.hibernate.type.descriptor.converter.spi.BasicValueConverter;
 import org.hibernate.type.descriptor.java.EnumJavaType;
-import org.hibernate.type.descriptor.java.JavaType;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
 import org.hibernate.type.descriptor.jdbc.JdbcTypeIndicators;
-import org.hibernate.type.spi.TypeConfiguration;
 
 /**
  * @author Steve Ebersole
@@ -66,19 +61,6 @@ public abstract class AbstractJdbcParameter
 	@Override
 	public void accept(SqlAstWalker sqlTreeWalker) {
 		sqlTreeWalker.visitParameter( this );
-	}
-
-	@Override
-	public SqlSelection createSqlSelection(
-			int jdbcPosition,
-			int valuesArrayPosition,
-			JavaType javaType,
-			TypeConfiguration typeConfiguration) {
-		// todo (6.0) : investigate "virtual" or "static" selections
-		//		- anything that is the same for each row always - parameter, literal, etc;
-		//			the idea would be to write the value directly into the JdbcValues array
-		//			and not generating a SQL selection in the query sent to DB
-		return new SqlSelectionImpl( jdbcPosition, valuesArrayPosition, javaType, this, false );
 	}
 
 	@Override
@@ -188,27 +170,7 @@ public abstract class AbstractJdbcParameter
 
 	@Override
 	public void addToCacheKey(MutableCacheKeyBuilder cacheKey, Object value, SharedSessionContractImplementor session) {
-		if ( value == null ) {
-			return;
-		}
-		final JdbcMapping jdbcMapping = getJdbcMapping();
-		final BasicValueConverter converter = jdbcMapping.getValueConverter();
-
-		final Serializable disassemble;
-		final int hashCode;
-		if ( converter == null ) {
-			final JavaType javaTypeDescriptor = jdbcMapping.getJavaTypeDescriptor();
-			disassemble = javaTypeDescriptor.getMutabilityPlan().disassemble( value, session );
-			hashCode = javaTypeDescriptor.extractHashCode( value );
-		}
-		else {
-			final Object relationalValue = converter.toRelationalValue( value );
-			final JavaType relationalJavaType = converter.getRelationalJavaType();
-			disassemble = relationalJavaType.getMutabilityPlan().disassemble( relationalValue, session );
-			hashCode = relationalJavaType.extractHashCode( relationalValue );
-		}
-		cacheKey.addValue( disassemble );
-		cacheKey.addHashCode( hashCode );
+		CacheHelper.addBasicValueToCacheKey( cacheKey, value, getJdbcMapping(), session );
 	}
 
 	@Override

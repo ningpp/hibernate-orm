@@ -3,10 +3,20 @@ import java.util.function.Function
 import org.asciidoctor.gradle.jvm.AsciidoctorTask
 import org.asciidoctor.gradle.jvm.pdf.AsciidoctorPdfTask
 
+buildscript {
+	configurations.all {
+		resolutionStrategy.dependencySubstitution {
+			substitute module( 'com.burgstaller:okhttp-digest:1.10' ) using module(
+					'io.github.rburgst:okhttp-digest:1.21'
+			) because 'okhttp-digest only version 1.21 is available on Maven Central. Old version was on jcenter, which asciidoctor-gradle-plugin depends on transitively through simplified-jruby-gradle-plugin via http-builder-ng-okhttp '
+		}
+	}
+}
+
 plugins {
-	id 'org.asciidoctor.jvm.convert' version '3.3.2'
-	id 'org.asciidoctor.jvm.pdf' version '3.3.2'
-	id "org.asciidoctor.jvm.gems" version "3.3.2"
+	id 'org.asciidoctor.jvm.convert' version '4.0.2'
+	id 'org.asciidoctor.jvm.pdf' version '4.0.2'
+	id "org.asciidoctor.jvm.gems" version "4.0.2"
 	id "org.hibernate.orm.build.settings-doc"
 }
 
@@ -456,6 +466,54 @@ def renderQueryLanguageGuidePdfTask = tasks.register( 'renderQueryLanguageGuideP
 	attributes jpaJavadocUrlPrefix: "https://javaee.github.io/javaee-spec/javadocs/javax/persistence/"
 }
 
+def renderRepositoriesHtmlTask = tasks.register( 'renderRepositoriesHtml', AsciidoctorTask ) { task ->
+	task.group = "Documentation"
+	task.description = 'Renders the Hibernate Data Repositories document in HTML format using Asciidoctor.'
+
+	task.inputs.property "hibernate-version", project.ormVersion
+
+	task.sourceDir = file( 'src/main/asciidoc/repositories' )
+	task.sources 'Hibernate_Data_Repositories.adoc'
+
+	task.outputDir = layout.buildDirectory.dir( "asciidoc/repositories/html_single" )
+
+	task.attributes linkcss: true,
+			stylesheet: "css/hibernate.css",
+			docinfo: 'private',
+			jpaJavadocUrlPrefix: "https://javaee.github.io/javaee-spec/javadocs/javax/persistence/"
+
+	task.resources {
+		from( 'src/main/asciidoc/repositories/' ) {
+			include 'images/**'
+		}
+		from( 'src/main/style/asciidoctor' ) {
+			include 'images/**'
+		}
+		from( 'src/main/style/asciidoctor' ) {
+			include 'css/**'
+		}
+		from( 'src/main/style/asciidoctor' ) {
+			include 'js/**'
+		}
+	}
+}
+
+def renderRepositoriesPdfTask = tasks.register( 'renderRepositoriesPdf', AsciidoctorPdfTask ) { task ->
+	group = "Documentation"
+	description = 'Renders the Hibernate Data Repositories document in PDF format using Asciidoctor.'
+
+	inputs.property "hibernate-version", project.ormVersion
+
+	sourceDir = file( 'src/main/asciidoc/repositories' )
+	baseDir = file( 'src/main/asciidoc/repositories' )
+	sources {
+		include 'Hibernate_Data_Repositories.adoc'
+	}
+	outputDir = layout.buildDirectory.dir( "asciidoc/repositories/pdf" )
+
+	attributes jpaJavadocUrlPrefix: "https://javaee.github.io/javaee-spec/javadocs/javax/persistence/"
+}
+
 //noinspection GroovyUnusedAssignment
 def renderQueryLanguageGuidesTask = tasks.register( 'renderQueryLanguageGuides' ) { task ->
 	group = "Documentation"
@@ -465,6 +523,17 @@ def renderQueryLanguageGuidesTask = tasks.register( 'renderQueryLanguageGuides' 
 
 	tasks.buildDocs.dependsOn task
 }
+
+//noinspection GroovyUnusedAssignment
+def renderRepositoriesTask = tasks.register( 'renderRepositories' ) { task ->
+	group = "Documentation"
+	description = 'Renders Hibernate Data Repositories documentation in all formats.'
+	task.dependsOn renderRepositoriesHtmlTask
+	task.dependsOn renderRepositoriesPdfTask
+
+	tasks.buildDocs.dependsOn task
+}
+
 
 
 // User Guide ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -502,16 +571,44 @@ settingsDocumentation {
 			description = "Settings related to integrating with the Proxool Connection pool"
 			settingsClassName "org.hibernate.cfg.ProxoolSettings"
 		}
-		mapping {
+		transaction {
 			explicitPosition = 6
+			summary = "Proxool Connection Pool Settings"
+			description = "Settings which control how Hibernate interacts with and manages transactions"
+			settingsClassName "org.hibernate.cfg.TransactionSettings"
+		}
+		mapping {
+			explicitPosition = 7
 			summary = "Domain Mapping Settings"
 			description = "Settings which control how domain mappings are handled"
 			settingsClassName "org.hibernate.cfg.MappingSettings"
+		}
+		fetch {
+			explicitPosition = 8
+			summary = "Fetch Related Settings"
+			description = "Settings which control aspects of fetching data from the database"
+			settingsClassName "org.hibernate.cfg.FetchSettings"
+		}
+		batch {
+			explicitPosition = 9
+			summary = "JDBC Batch Settings"
+			description = "Settings which control how Hibernate performs JDBC batching updating"
+			settingsClassName "org.hibernate.cfg.BatchSettings"
 		}
 		environment {
 			summary = "Runtime Environment Settings"
 			description = "Settings related to JNDI and ClassLoaders"
 			settingsClassName "org.hibernate.cfg.EnvironmentSettings"
+		}
+		tenancy {
+			summary = "Multi-tenancy Settings"
+			description = "Settings related multi-tenancy support"
+			settingsClassName "org.hibernate.cfg.MultiTenancySettings"
+		}
+		cdi {
+			summary = "CDI Settings"
+			description = "Settings related to CDI"
+			settingsClassName "org.hibernate.cfg.ManagedBeanSettings"
 		}
 		schema {
 			summary = "Schema Tooling Settings"
@@ -544,6 +641,11 @@ settingsDocumentation {
 			description = "Settings used in the integration of Jakarta Validation"
 			settingsClassName "org.hibernate.cfg.ValidationSettings"
 		}
+		dialect {
+			summary = "Dialect Specific Settings"
+			description = "Settings used for dialect configuration when the database isn't available"
+			settingsClassName "org.hibernate.cfg.DialectSpecificSettings"
+		}
 		envers {
 			summary = "Audit/History Settings"
 			description = "Settings which control Hibernate's audit/history support (hibernate-envers)"
@@ -554,6 +656,11 @@ settingsDocumentation {
 			description = "Settings which control Hibernate's support for spatial data (hibernate-spatial)"
 			settingsClassName "org.hibernate.spatial.HibernateSpatialConfigurationSettings"
 			settingsClassName "org.hibernate.spatial.integration.SpatialService"
+		}
+		session {
+			summary = "Session Event Settings"
+			description = "Settings related to Session events"
+			settingsClassName "org.hibernate.cfg.SessionEventSettings"
 		}
 		misc {
 			summary = "Miscellaneous Settings"
@@ -596,7 +703,7 @@ def renderUserGuideHtmlTask = tasks.register( 'renderUserGuideHtml', Asciidoctor
 			   stylesheet: "css/hibernate.css",
 			   docinfo: 'private',
 			   jpaJavadocUrlPrefix: "https://javaee.github.io/javaee-spec/javadocs/javax/persistence/",
-			   'generated-report-dir': layout.buildDirectory.dir( 'orm/generated' )
+			   'generated-report-dir': layout.buildDirectory.dir( 'orm/generated' ).get()
 
 	resources {
 		from( 'src/main/asciidoc/userguide/' ) {
@@ -771,6 +878,7 @@ def buildDocsTask = tasks.register( 'buildDocs' ) { task ->
 	task.dependsOn renderIntroductionGuidesTask
 	task.dependsOn renderUserGuidesTask
 	task.dependsOn renderQueryLanguageGuidesTask
+	task.dependsOn renderRepositoriesTask
 	task.dependsOn renderIntegrationGuidesTask
 	task.dependsOn renderTopicalGuidesTask
 	task.dependsOn generateReportsTask

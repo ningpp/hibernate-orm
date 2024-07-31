@@ -30,6 +30,7 @@ import org.hibernate.query.named.NamedResultSetMappingMemento;
 import org.hibernate.query.results.dynamic.DynamicFetchBuilderLegacy;
 import org.hibernate.sql.ast.spi.SqlSelection;
 import org.hibernate.sql.results.graph.DomainResult;
+import org.hibernate.sql.results.graph.FetchParent;
 import org.hibernate.sql.results.graph.basic.BasicResult;
 import org.hibernate.sql.results.graph.entity.EntityResult;
 import org.hibernate.sql.results.jdbc.spi.JdbcValuesMapping;
@@ -328,7 +329,10 @@ public class ResultSetMappingImpl implements ResultSetMapping {
 		return new BasicResult(
 				valuesArrayPosition,
 				name,
-				jdbcMapping
+				jdbcMapping,
+				null,
+				false,
+				false
 		);
 	}
 

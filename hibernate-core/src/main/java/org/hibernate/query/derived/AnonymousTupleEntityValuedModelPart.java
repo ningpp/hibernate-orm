@@ -198,9 +198,7 @@ public class AnonymousTupleEntityValuedModelPart
 
 	@Override
 	public Object getValue(Object instance, int position) {
-		return delegate.getEntityMappingType()
-				.getAttributeMapping( position )
-				.getValue( instance );
+		return delegate.getEntityMappingType().getValue( instance, position );
 	}
 
 	@Override
@@ -210,9 +208,7 @@ public class AnonymousTupleEntityValuedModelPart
 
 	@Override
 	public void setValue(Object instance, int position, Object value) {
-		delegate.getEntityMappingType()
-				.getAttributeMapping( position )
-				.setValue( instance, value );
+		delegate.getEntityMappingType().setValue( instance, position, value );
 	}
 
 	@Override
@@ -430,7 +426,7 @@ public class AnonymousTupleEntityValuedModelPart
 				primaryTableReference,
 				true,
 				sqlAliasBase,
-				entityMappingType::containsTableReference,
+				entityMappingType.getRootEntityDescriptor()::containsTableReference,
 				(tableExpression, tg) -> entityMappingType.createTableReferenceJoin(
 						tableExpression,
 						sqlAliasBase,
@@ -743,6 +739,11 @@ public class AnonymousTupleEntityValuedModelPart
 
 	@Override
 	public boolean isAffectedByInfluencers(LoadQueryInfluencers influencers) {
+		return false;
+	}
+
+	@Override
+	public boolean isAffectedByEnabledFilters(LoadQueryInfluencers influencers, boolean onlyApplyForLoadByKeyFilters) {
 		return false;
 	}
 

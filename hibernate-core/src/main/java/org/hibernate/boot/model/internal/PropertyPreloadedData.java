@@ -25,6 +25,10 @@ public class PropertyPreloadedData implements PropertyData {
 		this.returnedClass = returnedClass;
 	}
 
+	PropertyPreloadedData() {
+		this( null, null, null );
+	}
+
 	@Override
 	public AccessType getDefaultAccess() throws MappingException {
 		return defaultAccess;
@@ -37,6 +41,11 @@ public class PropertyPreloadedData implements PropertyData {
 
 	@Override
 	public XClass getClassOrElement() throws MappingException {
+		return getPropertyClass();
+	}
+
+	@Override
+	public XClass getClassOrPluralElement() throws MappingException {
 		return getPropertyClass();
 	}
 

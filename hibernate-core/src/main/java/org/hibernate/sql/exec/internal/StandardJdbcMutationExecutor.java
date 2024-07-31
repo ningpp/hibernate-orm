@@ -11,14 +11,17 @@ import java.sql.SQLException;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 
+import org.hibernate.JDBCException;
 import org.hibernate.engine.jdbc.spi.JdbcServices;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
-import org.hibernate.event.jfr.JdbcPreparedStatementExecutionEvent;
-import org.hibernate.event.jfr.internal.JfrEventManager;
+import org.hibernate.event.spi.EventManager;
+import org.hibernate.event.spi.HibernateMonitoringEvent;
+import org.hibernate.exception.ConstraintViolationException;
 import org.hibernate.query.spi.QueryOptions;
 import org.hibernate.resource.jdbc.spi.LogicalConnectionImplementor;
 import org.hibernate.sql.exec.spi.ExecutionContext;
 import org.hibernate.sql.exec.spi.JdbcMutationExecutor;
+import org.hibernate.sql.exec.spi.JdbcOperationQueryInsert;
 import org.hibernate.sql.exec.spi.JdbcOperationQueryMutation;
 import org.hibernate.sql.exec.spi.JdbcParameterBinder;
 import org.hibernate.sql.exec.spi.JdbcParameterBindings;
@@ -81,14 +84,15 @@ public class StandardJdbcMutationExecutor implements JdbcMutationExecutor {
 				}
 
 				session.getEventListenerManager().jdbcExecuteStatementStart();
-				final JdbcPreparedStatementExecutionEvent jdbcPreparedStatementExecutionEvent = JfrEventManager.beginJdbcPreparedStatementExecutionEvent();
+				final EventManager eventManager = session.getEventManager();
+				final HibernateMonitoringEvent jdbcPreparedStatementExecutionEvent = eventManager.beginJdbcPreparedStatementExecutionEvent();
 				try {
 					int rows = preparedStatement.executeUpdate();
 					expectationCheck.accept( rows, preparedStatement );
 					return rows;
 				}
 				finally {
-					JfrEventManager.completeJdbcPreparedStatementExecutionEvent( jdbcPreparedStatementExecutionEvent, finalSql );
+					eventManager.completeJdbcPreparedStatementExecutionEvent( jdbcPreparedStatementExecutionEvent, finalSql );
 					session.getEventListenerManager().jdbcExecuteStatementEnd();
 				}
 			}
@@ -97,13 +101,34 @@ public class StandardJdbcMutationExecutor implements JdbcMutationExecutor {
 			}
 		}
 		catch (SQLException e) {
-			throw jdbcServices.getSqlExceptionHelper().convert(
+			final JDBCException exception = jdbcServices.getSqlExceptionHelper().convert(
 					e,
 					"JDBC exception executing SQL [" + finalSql + "]"
 			);
+			if ( exception instanceof ConstraintViolationException && jdbcMutation instanceof JdbcOperationQueryInsert ) {
+				final ConstraintViolationException constraintViolationException = (ConstraintViolationException) exception;
+				if ( constraintViolationException.getKind() == ConstraintViolationException.ConstraintKind.UNIQUE ) {
+					final JdbcOperationQueryInsert jdbcInsert = (JdbcOperationQueryInsert) jdbcMutation;
+					final String uniqueConstraintNameThatMayFail = jdbcInsert.getUniqueConstraintNameThatMayFail();
+					if ( uniqueConstraintNameThatMayFail != null ) {
+						final String violatedConstraintName = constraintViolationException.getConstraintName();
+						if ( constraintNameMatches( uniqueConstraintNameThatMayFail, violatedConstraintName ) ) {
+							return 0;
+						}
+					}
+				}
+			}
+			throw exception;
 		}
 		finally {
 			executionContext.afterStatement( logicalConnection );
 		}
+	}
+
+	private static boolean constraintNameMatches(String uniqueConstraintNameThatMayFail, String violatedConstraintName) {
+		return uniqueConstraintNameThatMayFail.isEmpty()
+			|| uniqueConstraintNameThatMayFail.equalsIgnoreCase(violatedConstraintName)
+			|| violatedConstraintName != null && violatedConstraintName.indexOf('.') > 0
+				&& uniqueConstraintNameThatMayFail.equalsIgnoreCase(violatedConstraintName.substring(violatedConstraintName.lastIndexOf('.') + 1));
 	}
 }

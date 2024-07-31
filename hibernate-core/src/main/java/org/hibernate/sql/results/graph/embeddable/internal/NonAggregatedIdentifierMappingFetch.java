@@ -12,9 +12,8 @@ import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.results.graph.AssemblerCreationState;
 import org.hibernate.sql.results.graph.DomainResultCreationState;
 import org.hibernate.sql.results.graph.FetchParent;
-import org.hibernate.sql.results.graph.FetchParentAccess;
-import org.hibernate.sql.results.graph.Initializer;
-import org.hibernate.sql.results.graph.embeddable.EmbeddableResultGraphNode;
+import org.hibernate.sql.results.graph.InitializerParent;
+import org.hibernate.sql.results.graph.embeddable.EmbeddableInitializer;
 
 public class NonAggregatedIdentifierMappingFetch extends EmbeddableFetchImpl {
 	public NonAggregatedIdentifierMappingFetch(
@@ -32,10 +31,7 @@ public class NonAggregatedIdentifierMappingFetch extends EmbeddableFetchImpl {
 	}
 
 	@Override
-	protected Initializer buildEmbeddableFetchInitializer(
-			FetchParentAccess parentAccess,
-			EmbeddableResultGraphNode embeddableFetch,
-			AssemblerCreationState creationState) {
-		return new NonAggregatedIdentifierMappingFetchInitializer( parentAccess, this, creationState );
+	public EmbeddableInitializer<?> createInitializer(InitializerParent<?> parent, AssemblerCreationState creationState) {
+		return new NonAggregatedIdentifierMappingInitializer( this, parent, creationState, false );
 	}
 }

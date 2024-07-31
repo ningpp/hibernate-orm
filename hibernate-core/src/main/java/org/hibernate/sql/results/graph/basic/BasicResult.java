@@ -6,14 +6,16 @@
  */
 package org.hibernate.sql.results.graph.basic;
 
+import java.util.BitSet;
+
 import org.hibernate.Internal;
 import org.hibernate.metamodel.mapping.JdbcMapping;
+import org.hibernate.sql.results.graph.InitializerParent;
 import org.hibernate.type.descriptor.converter.spi.BasicValueConverter;
 import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.results.graph.AssemblerCreationState;
 import org.hibernate.sql.results.graph.DomainResult;
 import org.hibernate.sql.results.graph.DomainResultAssembler;
-import org.hibernate.sql.results.graph.FetchParentAccess;
 import org.hibernate.type.descriptor.java.JavaType;
 
 /**
@@ -27,7 +29,7 @@ public class BasicResult<T> implements DomainResult<T>, BasicResultGraphNode<T> 
 
 	private final NavigablePath navigablePath;
 
-	private final DomainResultAssembler<T> assembler;
+	private final BasicResultAssembler<T> assembler;
 
 	public BasicResult(
 			int jdbcValuesArrayPosition,
@@ -37,7 +39,9 @@ public class BasicResult<T> implements DomainResult<T>, BasicResultGraphNode<T> 
 				jdbcValuesArrayPosition,
 				resultVariable,
 				jdbcMapping,
-				null
+				null,
+				false,
+				false
 		);
 	}
 
@@ -45,63 +49,19 @@ public class BasicResult<T> implements DomainResult<T>, BasicResultGraphNode<T> 
 			int jdbcValuesArrayPosition,
 			String resultVariable,
 			JdbcMapping jdbcMapping,
-			boolean coerceResultType) {
+			NavigablePath navigablePath,
+			boolean coerceResultType,
+			boolean unwrapRowProcessingState) {
 		//noinspection unchecked
 		this(
 				jdbcValuesArrayPosition,
 				resultVariable,
 				jdbcMapping.getJavaTypeDescriptor(),
 				jdbcMapping.getValueConverter(),
-				null,
-				coerceResultType
+				navigablePath,
+				coerceResultType,
+				unwrapRowProcessingState
 		);
-	}
-
-	public BasicResult(
-			int jdbcValuesArrayPosition,
-			String resultVariable,
-			JdbcMapping jdbcMapping,
-			NavigablePath navigablePath) {
-		//noinspection unchecked
-		this(
-				jdbcValuesArrayPosition,
-				resultVariable,
-				(JavaType<T>) jdbcMapping.getJavaTypeDescriptor(),
-				(BasicValueConverter<T, ?>) jdbcMapping.getValueConverter(),
-				navigablePath
-		);
-	}
-
-	public BasicResult(
-			int jdbcValuesArrayPosition,
-			String resultVariable,
-			JavaType<T> javaType) {
-		this( jdbcValuesArrayPosition, resultVariable, javaType, null, null );
-	}
-
-	public BasicResult(
-			int jdbcValuesArrayPosition,
-			String resultVariable,
-			JavaType<T> javaType,
-			NavigablePath navigablePath) {
-		this( jdbcValuesArrayPosition, resultVariable, javaType, null, navigablePath );
-	}
-
-	public BasicResult(
-			int valuesArrayPosition,
-			String resultVariable,
-			JavaType<T> javaType,
-			BasicValueConverter<T,?> valueConverter) {
-		this( valuesArrayPosition, resultVariable, javaType, valueConverter, null );
-	}
-
-	public BasicResult(
-			int valuesArrayPosition,
-			String resultVariable,
-			JavaType<T> javaType,
-			BasicValueConverter<T,?> valueConverter,
-			NavigablePath navigablePath) {
-		this( valuesArrayPosition, resultVariable, javaType, valueConverter, navigablePath, false );
 	}
 
 	public BasicResult(
@@ -110,16 +70,17 @@ public class BasicResult<T> implements DomainResult<T>, BasicResultGraphNode<T> 
 			JavaType<T> javaType,
 			BasicValueConverter<T,?> valueConverter,
 			NavigablePath navigablePath,
-			boolean coerceResultType) {
+			boolean coerceResultType,
+			boolean unwrapRowProcessingState) {
 		this.resultVariable = resultVariable;
 		this.javaType = javaType;
 		this.navigablePath = navigablePath;
 
 		if ( coerceResultType ) {
-			this.assembler = new CoercingResultAssembler<>( valuesArrayPosition, javaType, valueConverter );
+			this.assembler = new CoercingResultAssembler<>( valuesArrayPosition, javaType, valueConverter, unwrapRowProcessingState );
 		}
 		else {
-			this.assembler = new BasicResultAssembler<>( valuesArrayPosition, javaType, valueConverter );
+			this.assembler = new BasicResultAssembler<>( valuesArrayPosition, javaType, valueConverter, unwrapRowProcessingState );
 		}
 	}
 
@@ -148,8 +109,13 @@ public class BasicResult<T> implements DomainResult<T>, BasicResultGraphNode<T> 
 
 	@Override
 	public DomainResultAssembler<T> createResultAssembler(
-			FetchParentAccess parentAccess,
+			InitializerParent<?> parent,
 			AssemblerCreationState creationState) {
 		return assembler;
+	}
+
+	@Override
+	public void collectValueIndexesToCache(BitSet valueIndexes) {
+		valueIndexes.set( assembler.valuesArrayPosition );
 	}
 }

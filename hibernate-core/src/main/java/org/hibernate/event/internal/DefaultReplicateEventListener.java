@@ -49,6 +49,7 @@ public class DefaultReplicateEventListener
 	 *
 	 * @throws TransientObjectException An invalid attempt to replicate a transient entity.
 	 */
+	@Override
 	public void onReplicate(ReplicateEvent event) {
 		final EventSource source = event.getSession();
 		final PersistenceContext persistenceContext = source.getPersistenceContextInternal();
@@ -85,11 +86,8 @@ public class DefaultReplicateEventListener
 		if ( oldVersion != null ) {
 			if ( LOG.isTraceEnabled() ) {
 				LOG.tracev(
-						"Found existing row for {0}", MessageHelper.infoString(
-						persister,
-						id,
-						source.getFactory()
-				)
+						"Found existing row for {0}",
+						MessageHelper.infoString( persister, id, event.getFactory() )
 				);
 			}
 
@@ -119,7 +117,7 @@ public class DefaultReplicateEventListener
 			if ( LOG.isTraceEnabled() ) {
 				LOG.tracev(
 						"No existing row, replicating new instance {0}",
-						MessageHelper.infoString( persister, id, source.getFactory() )
+						MessageHelper.infoString( persister, id, event.getFactory() )
 				);
 			}
 

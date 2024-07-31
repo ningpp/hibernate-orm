@@ -8,7 +8,6 @@ package org.hibernate.type.descriptor.java;
 
 import java.sql.Time;
 import java.sql.Timestamp;
-import java.sql.Types;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -21,14 +20,15 @@ import java.util.Calendar;
 import java.util.Date;
 import java.util.GregorianCalendar;
 
-import jakarta.persistence.TemporalType;
-
 import org.hibernate.dialect.Dialect;
+import org.hibernate.type.SqlTypes;
 import org.hibernate.type.descriptor.DateTimeUtils;
 import org.hibernate.type.descriptor.WrapperOptions;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
 import org.hibernate.type.descriptor.jdbc.JdbcTypeIndicators;
 import org.hibernate.type.spi.TypeConfiguration;
+
+import jakarta.persistence.TemporalType;
 
 /**
  * Java type descriptor for the {@link OffsetTime} type.
@@ -52,8 +52,10 @@ public class OffsetTimeJavaType extends AbstractTemporalJavaType<OffsetTime> {
 
 	@Override
 	public JdbcType getRecommendedJdbcType(JdbcTypeIndicators stdIndicators) {
-		return stdIndicators.getTypeConfiguration().getJdbcTypeRegistry()
-				.getDescriptor( stdIndicators.getDefaultZonedTimeSqlType() );
+		if ( stdIndicators.isPreferJavaTimeJdbcTypesEnabled() ) {
+			return stdIndicators.getJdbcType( SqlTypes.OFFSET_TIME );
+		}
+		return stdIndicators.getJdbcType( stdIndicators.getDefaultZonedTimeSqlType() );
 	}
 
 	@Override
@@ -184,9 +186,14 @@ public class OffsetTimeJavaType extends AbstractTemporalJavaType<OffsetTime> {
 			final OffsetTime offsetTime = time.toLocalTime()
 					.atOffset( getCurrentJdbcOffset( options) )
 					.withOffsetSameInstant( getCurrentSystemOffset() );
-			final long millis = time.getTime() % 1000;
+			long millis = time.getTime() % 1000;
 			if ( millis == 0 ) {
 				return offsetTime;
+			}
+			if ( millis < 0 ) {
+				// The milliseconds for a Time could be negative,
+				// which usually means the time is in a different time zone
+				millis += 1_000L;
 			}
 			return offsetTime.with( ChronoField.NANO_OF_SECOND, millis * 1_000_000L );
 		}

@@ -9,7 +9,10 @@ package org.hibernate.boot.spi;
 import org.hibernate.Incubating;
 import org.hibernate.boot.model.TypeDefinitionRegistry;
 import org.hibernate.boot.model.naming.ObjectNameNormalizer;
+import org.hibernate.cfg.MappingSettings;
+import org.hibernate.engine.config.spi.ConfigurationService;
 import org.hibernate.internal.util.config.ConfigurationHelper;
+import org.hibernate.service.ServiceRegistry;
 
 /**
  * Describes the context in which the process of building {@link org.hibernate.boot.Metadata}
@@ -75,6 +78,42 @@ public interface MetadataBuildingContext {
 	@Incubating
 	default int getPreferredSqlTypeCodeForArray() {
 		return ConfigurationHelper.getPreferredSqlTypeCodeForArray( getBootstrapContext().getServiceRegistry() );
+	}
+
+	@Incubating
+	default boolean isPreferJavaTimeJdbcTypesEnabled() {
+		return isPreferJavaTimeJdbcTypesEnabled( getBootstrapContext().getServiceRegistry() );
+	}
+
+	@Incubating
+	default boolean isPreferNativeEnumTypesEnabled() {
+		return isPreferNativeEnumTypesEnabled( getBootstrapContext().getServiceRegistry() );
+	}
+
+	static boolean isPreferJavaTimeJdbcTypesEnabled(ServiceRegistry serviceRegistry) {
+		return isPreferJavaTimeJdbcTypesEnabled( serviceRegistry.requireService( ConfigurationService.class ) );
+	}
+
+	static boolean isPreferNativeEnumTypesEnabled(ServiceRegistry serviceRegistry) {
+		return isPreferNativeEnumTypesEnabled( serviceRegistry.requireService( ConfigurationService.class ) );
+	}
+
+	static boolean isPreferJavaTimeJdbcTypesEnabled(ConfigurationService configurationService) {
+		return ConfigurationHelper.getBoolean(
+				MappingSettings.JAVA_TIME_USE_DIRECT_JDBC,
+				configurationService.getSettings(),
+				// todo : true would be better eventually so maybe just rip off that band aid
+				false
+		);
+	}
+
+	static boolean isPreferNativeEnumTypesEnabled(ConfigurationService configurationService) {
+		return ConfigurationHelper.getBoolean(
+				MappingSettings.PREFER_NATIVE_ENUM_TYPES,
+				configurationService.getSettings(),
+				// todo: switch to true with HHH-17905
+				false
+		);
 	}
 
 	TypeDefinitionRegistry getTypeDefinitionRegistry();

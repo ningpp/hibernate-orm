@@ -69,6 +69,7 @@ import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
 import jakarta.persistence.criteria.Selection;
 import jakarta.persistence.criteria.SetJoin;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
  * @author Steve Ebersole
@@ -258,7 +259,6 @@ public class SqmSubQuery<T> extends AbstractSqmSelectQuery<T> implements SqmSele
 					break;
 				}
 				default: {
-					setResultType( (Class<T>) Object[].class );
 					resultSelection = ( Selection<? extends T> ) nodeBuilder().array( selections );
 				}
 			}
@@ -601,28 +601,25 @@ public class SqmSubQuery<T> extends AbstractSqmSelectQuery<T> implements SqmSele
 	}
 
 	@Override
-	public SqmExpressible<T> getNodeType() {
+	public @Nullable SqmExpressible<T> getNodeType() {
 		return expressibleType;
 	}
 
 	@Override
-	public void applyInferableType(SqmExpressible<?> type) {
+	public void applyInferableType(@Nullable SqmExpressible<?> type) {
 		//noinspection unchecked
 		expressibleType = (SqmExpressible<T>) type;
-		if ( expressibleType != null && expressibleType.getExpressibleJavaType() != null ) {
-			setResultType( expressibleType.getExpressibleJavaType().getJavaTypeClass() );
-		}
 	}
 
 	private void applyInferableType(Class<T> type) {
-		final EntityDomainType<T> entityDescriptor = nodeBuilder().getSessionFactory().getRuntimeMetamodels()
-				.getJpaMetamodel()
-				.findEntityType( type );
-		if ( entityDescriptor != null ) {
-			this.expressibleType = entityDescriptor;
-		}
-		else {
-			this.expressibleType = nodeBuilder().getTypeConfiguration().getBasicTypeForJavaType( type );
+		if ( type != null ) {
+			final EntityDomainType<T> entityDescriptor = nodeBuilder().getDomainModel().findEntityType( type );
+			if ( entityDescriptor != null ) {
+				this.expressibleType = entityDescriptor;
+			}
+			else {
+				this.expressibleType = nodeBuilder().getTypeConfiguration().getBasicTypeForJavaType( type );
+			}
 		}
 	}
 

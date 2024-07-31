@@ -50,6 +50,7 @@ public class DefaultPersistEventListener
 	 * @param event The create event to be handled.
 	 *
 	 */
+	@Override
 	public void onPersist(PersistEvent event) throws HibernateException {
 		onPersist( event, PersistContext.create() );
 	}
@@ -60,6 +61,7 @@ public class DefaultPersistEventListener
 	 * @param event The create event to be handled.
 	 *
 	 */
+	@Override
 	public void onPersist(PersistEvent event, PersistContext createCache) throws HibernateException {
 		final Object object = event.getObject();
 		final LazyInitializer lazyInitializer = HibernateProxy.extractLazyInitializer( object );
@@ -120,7 +122,7 @@ public class DefaultPersistEventListener
 			// entity state again.
 
 			// NOTE: entityEntry must be null to get here, so we cannot use any of its values
-			final EntityPersister persister = source.getFactory().getMappingMetamodel()
+			final EntityPersister persister = event.getFactory().getMappingMetamodel()
 					.getEntityDescriptor( entityName );
 			if ( persister.getGenerator() instanceof ForeignGenerator ) {
 				if ( LOG.isDebugEnabled() && persister.getIdentifier( entity, source ) != null ) {
@@ -183,7 +185,7 @@ public class DefaultPersistEventListener
 		if ( LOG.isTraceEnabled() ) {
 			LOG.tracef(
 				"un-scheduling entity deletion [%s]",
-				MessageHelper.infoString( persister, persister.getIdentifier( entity, source ), source.getFactory() )
+				MessageHelper.infoString( persister, persister.getIdentifier( entity, source ), event.getFactory() )
 			);
 		}
 		if ( createCache.add( entity ) ) {

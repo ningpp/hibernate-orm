@@ -43,6 +43,16 @@ public class DelegatingJdbcTypeIndicators implements JdbcTypeIndicators {
 	}
 
 	@Override
+	public boolean isPreferJavaTimeJdbcTypesEnabled() {
+		return delegate.isPreferJavaTimeJdbcTypesEnabled();
+	}
+
+	@Override
+	public boolean isPreferNativeEnumTypesEnabled() {
+		return delegate.isPreferNativeEnumTypesEnabled();
+	}
+
+	@Override
 	public int getPreferredSqlTypeCodeForBoolean() {
 		return delegate.getPreferredSqlTypeCodeForBoolean();
 	}

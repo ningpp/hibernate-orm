@@ -47,6 +47,8 @@ import org.hibernate.sql.results.graph.Fetchable;
 import org.hibernate.sql.results.graph.embeddable.internal.NonAggregatedIdentifierMappingFetch;
 import org.hibernate.sql.results.graph.embeddable.internal.NonAggregatedIdentifierMappingResult;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
+
 /**
  * A "non-aggregated" composite identifier.
  *
@@ -117,6 +119,17 @@ public class NonAggregatedIdentifierMappingImpl extends AbstractCompositeIdentif
 		}
 	}
 
+	/*
+	 * Used by Hibernate Reactive
+	 */
+	protected NonAggregatedIdentifierMappingImpl(NonAggregatedIdentifierMappingImpl original) {
+		super( original );
+		entityDescriptor = original.entityDescriptor;
+		virtualIdEmbeddable = original.virtualIdEmbeddable;
+		idClassEmbeddable = original.idClassEmbeddable;
+		identifierValueMapper = original.identifierValueMapper;
+	}
+
 	@Override
 	public EmbeddableMappingType getMappedType() {
 		return virtualIdEmbeddable;
@@ -150,6 +163,11 @@ public class NonAggregatedIdentifierMappingImpl extends AbstractCompositeIdentif
 	@Override
 	public EmbeddableMappingType getMappedIdEmbeddableTypeDescriptor() {
 		return identifierValueMapper;
+	}
+
+	@Override
+	public boolean areEqual(@Nullable Object one, @Nullable Object other, SharedSessionContractImplementor session) {
+		return identifierValueMapper.areEqual( one, other, session );
 	}
 
 	@Override
@@ -224,15 +242,11 @@ public class NonAggregatedIdentifierMappingImpl extends AbstractCompositeIdentif
 			if ( lazyInitializer != null ) {
 				return lazyInitializer.getIdentifier();
 			}
-			final Object id = identifierValueMapper.getRepresentationStrategy().getInstantiator().instantiate(
-					null,
-					sessionFactory
-			);
 			final EmbeddableMappingType embeddableTypeDescriptor = getEmbeddableTypeDescriptor();
 			final Object[] propertyValues = new Object[embeddableTypeDescriptor.getNumberOfAttributeMappings()];
 			for ( int i = 0; i < propertyValues.length; i++ ) {
 				final AttributeMapping attributeMapping = embeddableTypeDescriptor.getAttributeMapping( i );
-				final Object o = attributeMapping.getPropertyAccess().getGetter().get( entity );
+				final Object o = attributeMapping.getValue( entity );
 				if ( o == null ) {
 					final AttributeMapping idClassAttributeMapping = identifierValueMapper.getAttributeMapping( i );
 					if ( idClassAttributeMapping.getPropertyAccess().getGetter().getReturnTypeClass().isPrimitive() ) {
@@ -261,8 +275,10 @@ public class NonAggregatedIdentifierMappingImpl extends AbstractCompositeIdentif
 					propertyValues[i] = o;
 				}
 			}
-			identifierValueMapper.setValues( id, propertyValues );
-			return id;
+			return identifierValueMapper.getRepresentationStrategy().getInstantiator().instantiate(
+					() -> propertyValues,
+					sessionFactory
+			);
 		}
 		else {
 			return entity;
@@ -276,7 +292,7 @@ public class NonAggregatedIdentifierMappingImpl extends AbstractCompositeIdentif
 		for ( int i = 0; i < propertyValues.length; i++ ) {
 			final AttributeMapping attribute = embeddableTypeDescriptor.getAttributeMapping( i );
 			final AttributeMapping mappedIdAttributeMapping = identifierValueMapper.getAttributeMapping( i );
-			Object o = mappedIdAttributeMapping.getPropertyAccess().getGetter().get( id );
+			Object o = mappedIdAttributeMapping.getValue( id );
 			if ( attribute instanceof ToOneAttributeMapping && !( mappedIdAttributeMapping instanceof ToOneAttributeMapping ) ) {
 				final ToOneAttributeMapping toOneAttributeMapping = (ToOneAttributeMapping) attribute;
 				final EntityPersister entityPersister = toOneAttributeMapping.getEntityMappingType().getEntityPersister();

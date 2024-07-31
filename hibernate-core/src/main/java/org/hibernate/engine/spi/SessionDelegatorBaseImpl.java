@@ -38,6 +38,8 @@ import org.hibernate.engine.jdbc.LobCreator;
 import org.hibernate.engine.jdbc.connections.spi.JdbcConnectionAccess;
 import org.hibernate.engine.jdbc.spi.JdbcCoordinator;
 import org.hibernate.engine.jdbc.spi.JdbcServices;
+import org.hibernate.event.spi.AutoFlushEvent;
+import org.hibernate.event.spi.EventManager;
 import org.hibernate.event.spi.DeleteContext;
 import org.hibernate.event.spi.EventSource;
 import org.hibernate.event.spi.MergeContext;
@@ -52,6 +54,7 @@ import org.hibernate.procedure.ProcedureCall;
 import org.hibernate.query.MutationQuery;
 import org.hibernate.query.SelectionQuery;
 import org.hibernate.query.criteria.HibernateCriteriaBuilder;
+import org.hibernate.query.criteria.JpaCriteriaInsert;
 import org.hibernate.query.criteria.JpaCriteriaInsertSelect;
 import org.hibernate.query.spi.QueryImplementor;
 import org.hibernate.query.spi.QueryProducerImplementor;
@@ -396,6 +399,17 @@ public class SessionDelegatorBaseImpl implements SessionImplementor {
 	}
 
 	@Override
+	public boolean autoFlushIfRequired(Set<String> querySpaces, boolean skipPreFlush)
+			throws HibernateException {
+		return delegate.autoFlushIfRequired( querySpaces, skipPreFlush );
+	}
+
+	@Override
+	public void autoPreFlush() {
+		delegate.autoPreFlush();
+	}
+
+	@Override
 	public void afterOperation(boolean success) {
 		delegate.afterOperation( success );
 	}
@@ -508,6 +522,12 @@ public class SessionDelegatorBaseImpl implements SessionImplementor {
 
 	@Override
 	public MutationQuery createMutationQuery(@SuppressWarnings("rawtypes") JpaCriteriaInsertSelect insertSelect) {
+		//noinspection resource
+		return delegate().createMutationQuery( insertSelect );
+	}
+
+	@Override
+	public MutationQuery createMutationQuery(@SuppressWarnings("rawtypes") JpaCriteriaInsert insertSelect) {
 		//noinspection resource
 		return delegate().createMutationQuery( insertSelect );
 	}
@@ -1221,6 +1241,11 @@ public class SessionDelegatorBaseImpl implements SessionImplementor {
 	@Override
 	public Integer getJdbcBatchSize() {
 		return delegate.getJdbcBatchSize();
+	}
+
+	@Override
+	public EventManager getEventManager() {
+		return delegate.getEventManager();
 	}
 
 	@Override

@@ -561,15 +561,15 @@ public final class StringHelper {
 		return count;
 	}
 
-	public static boolean isNotEmpty(String string) {
+	public static boolean isNotEmpty(@Nullable String string) {
 		return string != null && !string.isEmpty();
 	}
 
-	public static boolean isEmpty(String string) {
+	public static boolean isEmpty(@Nullable String string) {
 		return string == null || string.isEmpty();
 	}
 
-	public static boolean isBlank(String string) {
+	public static boolean isBlank(@Nullable String string) {
 		return string == null || string.isBlank();
 	}
 
@@ -742,7 +742,7 @@ public final class StringHelper {
 		final char first = name.charAt( 0 );
 		final char last = name.charAt( name.length() - 1 );
 
-		return ( ( first == last ) && ( first == '`' || first == '"' ) );
+		return first == last && ( first == '`' || first == '"' );
 	}
 
 	/**

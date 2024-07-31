@@ -14,7 +14,6 @@ import java.util.function.Consumer;
 
 import org.hibernate.engine.spi.CollectionKey;
 import org.hibernate.engine.spi.EntityHolder;
-import org.hibernate.engine.spi.EntityUniqueKey;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.event.spi.EventSource;
 import org.hibernate.event.spi.PostLoadEvent;
@@ -23,7 +22,6 @@ import org.hibernate.internal.CoreLogging;
 import org.hibernate.internal.CoreMessageLogger;
 import org.hibernate.query.spi.QueryOptions;
 import org.hibernate.sql.exec.spi.ExecutionContext;
-import org.hibernate.sql.results.graph.Initializer;
 import org.hibernate.sql.results.graph.collection.CollectionInitializer;
 import org.hibernate.sql.results.graph.collection.LoadingCollectionEntry;
 import org.hibernate.sql.results.graph.collection.internal.ArrayInitializer;
@@ -40,9 +38,9 @@ public class JdbcValuesSourceProcessingStateStandardImpl implements JdbcValuesSo
 	private final ExecutionContext executionContext;
 	private final JdbcValuesSourceProcessingOptions processingOptions;
 
-	private Map<EntityUniqueKey, Initializer> initializerByUniquKeyMap;
+	private List<EntityHolder> loadingEntityHolders;
+	private List<EntityHolder> reloadedEntityHolders;
 	private Map<CollectionKey, LoadingCollectionEntry> loadingCollectionMap;
-	private List<CollectionInitializer> arrayInitializers;
 
 	private final PreLoadEvent preLoadEvent;
 	private final PostLoadEvent postLoadEvent;
@@ -90,16 +88,29 @@ public class JdbcValuesSourceProcessingStateStandardImpl implements JdbcValuesSo
 	}
 
 	@Override
-	public void registerInitializer(EntityUniqueKey entityKey, Initializer initializer) {
-		if ( initializerByUniquKeyMap == null ) {
-			initializerByUniquKeyMap = new HashMap<>();
+	public void registerLoadingEntityHolder(EntityHolder holder) {
+		if ( loadingEntityHolders == null ) {
+			loadingEntityHolders = new ArrayList<>();
 		}
-		initializerByUniquKeyMap.put( entityKey, initializer );
+		loadingEntityHolders.add( holder );
 	}
 
 	@Override
-	public Initializer findInitializer(EntityUniqueKey entityKey) {
-		return initializerByUniquKeyMap == null ? null : initializerByUniquKeyMap.get( entityKey );
+	public List<EntityHolder> getLoadingEntityHolders() {
+		return loadingEntityHolders;
+	}
+
+	@Override
+	public void registerReloadedEntityHolder(EntityHolder holder) {
+		if ( reloadedEntityHolders == null ) {
+			reloadedEntityHolders = new ArrayList<>();
+		}
+		reloadedEntityHolders.add( holder );
+	}
+
+	@Override
+	public List<EntityHolder> getReloadedEntityHolders() {
+		return reloadedEntityHolders;
 	}
 
 	@Override
@@ -118,12 +129,6 @@ public class JdbcValuesSourceProcessingStateStandardImpl implements JdbcValuesSo
 		}
 
 		loadingCollectionMap.put( key, loadingCollectionEntry );
-		if ( loadingCollectionEntry.getInitializer() instanceof ArrayInitializer ) {
-			if ( arrayInitializers == null ) {
-				arrayInitializers = new ArrayList<>();
-			}
-			arrayInitializers.add( loadingCollectionEntry.getInitializer() );
-		}
 	}
 
 	@Override

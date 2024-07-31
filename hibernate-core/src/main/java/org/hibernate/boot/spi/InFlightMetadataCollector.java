@@ -7,6 +7,7 @@
 package org.hibernate.boot.spi;
 
 import java.io.Serializable;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
@@ -64,7 +65,7 @@ public interface InFlightMetadataCollector extends MetadataImplementor {
 	BootstrapContext getBootstrapContext();
 
 	/**
-	 * Add the PersistentClass for an entity mapping.
+	 * Add the {@link PersistentClass} for an entity mapping.
 	 *
 	 * @param persistentClass The entity metadata
 	 *
@@ -74,13 +75,18 @@ public interface InFlightMetadataCollector extends MetadataImplementor {
 	void addEntityBinding(PersistentClass persistentClass) throws DuplicateMappingException;
 
 	/**
-	 * Needed for SecondPass handling
+	 * A map of {@link PersistentClass} by entity name.
+	 * Needed for {@link SecondPass} handling.
 	 */
 	Map<String, PersistentClass> getEntityBindingMap();
 
 	void registerComponent(Component component);
 
 	void registerGenericComponent(Component component);
+
+	void registerEmbeddableSubclass(XClass superclass, XClass subclass);
+
+	List<XClass> getEmbeddableSubclasses(XClass superclass);
 
 	/**
 	 * Adds an import (for use in HQL).

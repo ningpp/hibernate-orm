@@ -13,6 +13,7 @@ import java.util.StringTokenizer;
 
 import org.hibernate.boot.model.naming.DatabaseIdentifier;
 import org.hibernate.boot.model.naming.Identifier;
+import org.hibernate.dialect.Dialect;
 import org.hibernate.tool.schema.extract.spi.ExtractionContext;
 import org.hibernate.tool.schema.extract.spi.TableInformation;
 
@@ -133,7 +134,29 @@ public class InformationExtractorJdbcDatabaseMetaDataImpl extends AbstractInform
 		}
 	}
 
+	@Override
+	protected <T> T processCrossReferenceResultSet(
+			String parentCatalog,
+			String parentSchema,
+			String parentTable,
+			String foreignCatalog,
+			String foreignSchema,
+			String foreignTable,
+			ExtractionContext.ResultSetProcessor<T> processor) throws SQLException {
+		try (ResultSet resultSet = getExtractionContext().getJdbcDatabaseMetaData().getCrossReference(
+				parentCatalog,
+				parentSchema,
+				parentTable,
+				foreignCatalog,
+				foreignSchema,
+				foreignTable) ) {
+			return processor.process( resultSet );
+		}
+	}
+
 	protected void addColumns(TableInformation tableInformation) {
+		final Dialect dialect = getExtractionContext().getJdbcEnvironment().getDialect();
+
 		final ExtractionContext extractionContext = getExtractionContext();
 		// We use this dummy query to retrieve the table information through the ResultSetMetaData
 		// This is significantly better than to use the DatabaseMetaData especially on Oracle with synonyms enabled
@@ -153,13 +176,22 @@ public class InformationExtractorJdbcDatabaseMetaDataImpl extends AbstractInform
 
 						for ( int i = 1; i <= columnCount; i++ ) {
 							final String columnName = metaData.getColumnName( i );
+							final int columnType = metaData.getColumnType( i );
+							final String typeName = new StringTokenizer( metaData.getColumnTypeName( i ), "()" ).nextToken();
+							final int scale = metaData.getScale( i );
 							final ColumnInformationImpl columnInformation = new ColumnInformationImpl(
 									tableInformation,
 									DatabaseIdentifier.toIdentifier( columnName ),
-									metaData.getColumnType( i ),
-									new StringTokenizer( metaData.getColumnTypeName( i ), "()" ).nextToken(),
-									metaData.getPrecision( i ),
-									metaData.getScale( i ),
+									columnType,
+									typeName,
+									dialect.resolveSqlTypeLength(
+											typeName,
+											columnType,
+											metaData.getPrecision( i ),
+											scale,
+											metaData.getColumnDisplaySize( i )
+									),
+									scale,
 									interpretNullable( metaData.isNullable( i ) )
 							);
 							tableInformation.addColumn( columnInformation );

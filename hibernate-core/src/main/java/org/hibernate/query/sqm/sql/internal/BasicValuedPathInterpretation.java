@@ -13,7 +13,6 @@ import java.util.function.Consumer;
 import org.hibernate.metamodel.MappingMetamodel;
 import org.hibernate.metamodel.mapping.BasicValuedModelPart;
 import org.hibernate.metamodel.mapping.EntityMappingType;
-import org.hibernate.metamodel.mapping.ManagedMappingType;
 import org.hibernate.metamodel.mapping.MappingType;
 import org.hibernate.metamodel.mapping.ModelPart;
 import org.hibernate.metamodel.mapping.ModelPartContainer;
@@ -34,7 +33,9 @@ import org.hibernate.sql.ast.tree.from.TableGroup;
 import org.hibernate.sql.ast.tree.from.TableReference;
 import org.hibernate.sql.ast.tree.update.Assignable;
 
-import static org.hibernate.query.sqm.internal.SqmUtil.needsTargetTableMapping;
+import static jakarta.persistence.metamodel.Type.PersistenceType.ENTITY;
+import static org.hibernate.internal.util.NullnessUtil.castNonNull;
+import static org.hibernate.query.sqm.internal.SqmUtil.getTargetMappingIfNeeded;
 
 /**
  * @author Steve Ebersole
@@ -51,8 +52,8 @@ public class BasicValuedPathInterpretation<T> extends AbstractSqmPathInterpretat
 		final TableGroup tableGroup = sqlAstCreationState.getFromClauseAccess().getTableGroup( lhs.getNavigablePath() );
 		EntityMappingType treatTarget = null;
 		final ModelPartContainer modelPartContainer;
-		if ( lhs instanceof SqmTreatedPath<?, ?> ) {
-			final EntityDomainType<?> treatTargetDomainType = ( (SqmTreatedPath<?, ?>) lhs ).getTreatTarget();
+		if ( lhs instanceof SqmTreatedPath<?, ?> && ( (SqmTreatedPath<?, ?>) lhs ).getTreatTarget().getPersistenceType() == ENTITY ) {
+			final EntityDomainType<?> treatTargetDomainType = (EntityDomainType<?>) ( (SqmTreatedPath<?, ?>) lhs ).getTreatTarget();
 
 			final MappingMetamodel mappingMetamodel = sqlAstCreationState.getCreationContext()
 					.getSessionFactory()
@@ -81,24 +82,14 @@ public class BasicValuedPathInterpretation<T> extends AbstractSqmPathInterpretat
 			}
 		}
 
-		final BasicValuedModelPart mapping;
-		if ( needsTargetTableMapping( sqmPath, modelPartContainer, sqlAstCreationState ) ) {
-			// In the select, group by, order by and having clause we have to make sure we render
-			// the column of the target table, never the FK column, if the lhs is a join type that
-			// requires it (right, full) or if this path is contained in group by clause
-			mapping = (BasicValuedModelPart) ( (ManagedMappingType) modelPartContainer.getPartMappingType() ).findSubPart(
-					sqmPath.getReferencedPathSource().getPathName(),
-					treatTarget
-			);
-		}
-		else {
-			mapping = (BasicValuedModelPart) modelPartContainer.findSubPart(
-					sqmPath.getReferencedPathSource().getPathName(),
-					treatTarget
-			);
-		}
+		// Use the target type to find the sub part if needed, otherwise just use the container
+		final ModelPart modelPart = getTargetMappingIfNeeded(
+				sqmPath,
+				modelPartContainer,
+				sqlAstCreationState
+		).findSubPart( sqmPath.getReferencedPathSource().getPathName(), treatTarget );
 
-		if ( mapping == null ) {
+		if ( modelPart == null ) {
 			if ( jpaQueryComplianceEnabled ) {
 				// to get the better error, see if we got nothing because of treat handling
 				final ModelPart subPart = tableGroup.getModelPart().findSubPart(
@@ -113,6 +104,7 @@ public class BasicValuedPathInterpretation<T> extends AbstractSqmPathInterpretat
 			throw new UnknownPathException( "Path '" + sqmPath.getNavigablePath() + "' did not reference a known model part" );
 		}
 
+		final BasicValuedModelPart mapping = castNonNull( modelPart.asBasicValuedModelPart() );
 		final TableReference tableReference = tableGroup.resolveTableReference(
 				sqmPath.getNavigablePath(),
 				mapping,

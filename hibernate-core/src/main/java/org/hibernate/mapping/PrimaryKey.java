@@ -65,7 +65,11 @@ public class PrimaryKey extends Constraint {
 	}
 
 	public String sqlConstraintString(Dialect dialect) {
-		StringBuilder buf = new StringBuilder("primary key (");
+		StringBuilder buf = new StringBuilder();
+		if ( orderingUniqueKey != null && orderingUniqueKey.isNameExplicit() ) {
+			buf.append( "constraint " ).append( orderingUniqueKey.getName() ).append( ' ' );
+		}
+		buf.append( "primary key (" );
 		boolean first = true;
 		for ( Column column : getColumns() ) {
 			if ( first ) {
@@ -96,7 +100,8 @@ public class PrimaryKey extends Constraint {
 		}
 		return buf.append(')').toString();
 	}
-	
+
+	@Deprecated(forRemoval = true)
 	public String generatedConstraintNamePrefix() {
 		return "PK_";
 	}
@@ -113,7 +118,7 @@ public class PrimaryKey extends Constraint {
 		final List<Column> columns = getColumns();
 		final Column[] columnsInOriginalOrder = new Column[columns.size()];
 		for ( int i = 0; i < columnsInOriginalOrder.length; i++ ) {
-			columnsInOriginalOrder[i] = columns.get( originalOrder[i] );
+			columnsInOriginalOrder[originalOrder[i]] = columns.get( i );
 		}
 		return Arrays.asList( columnsInOriginalOrder );
 	}

@@ -9,42 +9,37 @@ package org.hibernate.sql.results.graph.collection.internal;
 import org.hibernate.internal.log.LoggingHelper;
 import org.hibernate.metamodel.mapping.PluralAttributeMapping;
 import org.hibernate.spi.NavigablePath;
-import org.hibernate.sql.results.graph.DomainResultAssembler;
-import org.hibernate.sql.results.graph.FetchParentAccess;
-import org.hibernate.sql.results.jdbc.spi.RowProcessingState;
+import org.hibernate.sql.results.graph.AssemblerCreationState;
+import org.hibernate.sql.results.graph.DomainResult;
+import org.hibernate.sql.results.graph.InitializerParent;
 
 /**
  * @author Steve Ebersole
  */
-public class DelayedCollectionInitializer extends AbstractCollectionInitializer {
+public class DelayedCollectionInitializer extends AbstractCollectionInitializer<AbstractCollectionInitializer.CollectionInitializerData> {
 
 	public DelayedCollectionInitializer(
 			NavigablePath fetchedPath,
 			PluralAttributeMapping fetchedMapping,
-			FetchParentAccess parentAccess,
-			DomainResultAssembler<?> collectionKeyResultAssembler) {
-		super( fetchedPath, fetchedMapping, parentAccess, collectionKeyResultAssembler );
-		assert collectionKeyResultAssembler != null;
+			InitializerParent<?> parent,
+			DomainResult<?> collectionKeyResult,
+			AssemblerCreationState creationState) {
+		super( fetchedPath, fetchedMapping, parent, collectionKeyResult, false, creationState );
 	}
 
 	@Override
-	public void resolveInstance(RowProcessingState rowProcessingState) {
-		resolveInstance( rowProcessingState, false );
+	public void resolveInstance(CollectionInitializerData data) {
+		resolveInstance( data, false );
 	}
 
 	@Override
-	public void initializeInstance(RowProcessingState rowProcessingState) {
+	public void resolveInstance(Object instance, CollectionInitializerData data) {
+		resolveInstance( instance, data, false );
 	}
 
 	@Override
 	public String toString() {
 		return "DelayedCollectionInitializer(" + LoggingHelper.toLoggableString( getNavigablePath() ) + ")";
-	}
-
-	@Override
-	public void finishUpRow(RowProcessingState rowProcessingState) {
-		super.finishUpRow( rowProcessingState );
-		collectionInstance = null;
 	}
 
 }

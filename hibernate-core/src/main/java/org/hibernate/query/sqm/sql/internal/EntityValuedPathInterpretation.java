@@ -162,7 +162,9 @@ public class EntityValuedPathInterpretation<T> extends AbstractSqmPathInterpreta
 		// we try to make use of it and the FK model part if possible based on the inferred mapping
 		if ( mapping instanceof EntityAssociationMapping ) {
 			final EntityAssociationMapping associationMapping = (EntityAssociationMapping) mapping;
-			final ModelPart keyTargetMatchPart = associationMapping.getKeyTargetMatchPart();
+			final ModelPart keyTargetMatchPart = associationMapping.getForeignKeyDescriptor().getPart(
+					associationMapping.getSideNature()
+			);
 
 			if ( associationMapping.isFkOptimizationAllowed() ) {
 				final boolean forceUsingForeignKeyAssociationSidePart;
@@ -265,7 +267,7 @@ public class EntityValuedPathInterpretation<T> extends AbstractSqmPathInterpreta
 		if ( currentClause == Clause.GROUP || currentClause == Clause.ORDER ) {
 			assert sqlAstCreationState.getCurrentSqmQueryPart().isSimpleQueryPart();
 			final SqmQuerySpec<?> querySpec = sqlAstCreationState.getCurrentSqmQueryPart().getFirstQuerySpec();
-			if ( currentClause == Clause.ORDER && !querySpec.groupByClauseContains( navigablePath ) ) {
+			if ( currentClause == Clause.ORDER && !querySpec.groupByClauseContains( navigablePath, sqlAstCreationState ) ) {
 				// We must ensure that the order by expression be expanded but only if the group by
 				// contained the same expression, and that was expanded as well
 				expandToAllColumns = false;
@@ -325,8 +327,8 @@ public class EntityValuedPathInterpretation<T> extends AbstractSqmPathInterpreta
 			sqlExpression = new SqlTuple( expressions, entityMappingType );
 		}
 		else {
-			if ( resultModelPart instanceof BasicValuedModelPart ) {
-				final BasicValuedModelPart basicValuedModelPart = (BasicValuedModelPart) resultModelPart;
+			final BasicValuedModelPart basicValuedModelPart = resultModelPart.asBasicValuedModelPart();
+			if ( basicValuedModelPart != null ) {
 				final TableReference tableReference = tableGroup.resolveTableReference(
 						navigablePath,
 						basicValuedModelPart,
@@ -380,7 +382,7 @@ public class EntityValuedPathInterpretation<T> extends AbstractSqmPathInterpreta
 			final SqmPath<?> sqmPath = (SqmPath<?>) selection;
 			// Expansion is needed if the table group is null, i.e. we're in a top level query where EVPs are always
 			// expanded to all columns, or if the selection is on the same table (lhs) as the group by expression ...
-			return ( tableGroupPath == null || sqmPath.getLhs().getNavigablePath().equals( tableGroupPath ) )
+			return ( tableGroupPath == null || sqmPath.getLhs() != null && sqmPath.getLhs().getNavigablePath().equals( tableGroupPath ) )
 					// ... and if the entity valued path is selected or any of its columns are
 					&& path.isParentOrEqual( sqmPath.getNavigablePath() );
 		}

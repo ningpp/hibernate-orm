@@ -14,7 +14,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import org.hibernate.CacheMode;
-import org.hibernate.LockOptions;
 import org.hibernate.cache.spi.QueryKey;
 import org.hibernate.cache.spi.QueryResultsCache;
 import org.hibernate.engine.spi.PersistenceContext;
@@ -71,6 +70,28 @@ public class JdbcSelectExecutorStandardImpl implements JdbcSelectExecutor {
 			Class<R> domainResultType,
 			Function<String, PreparedStatement> statementCreator,
 			ResultsConsumer<T, R> resultsConsumer) {
+		return executeQuery(
+				jdbcSelect,
+				jdbcParameterBindings,
+				executionContext,
+				rowTransformer,
+				domainResultType,
+				-1,
+				statementCreator,
+				resultsConsumer
+		);
+	}
+
+	@Override
+	public <T, R> T executeQuery(
+			JdbcOperationQuerySelect jdbcSelect,
+			JdbcParameterBindings jdbcParameterBindings,
+			ExecutionContext executionContext,
+			RowTransformer<R> rowTransformer,
+			Class<R> domainResultType,
+			int resultCountEstimate,
+			Function<String, PreparedStatement> statementCreator,
+			ResultsConsumer<T, R> resultsConsumer) {
 		final PersistenceContext persistenceContext = executionContext.getSession().getPersistenceContext();
 		boolean defaultReadOnlyOrig = persistenceContext.isDefaultReadOnly();
 		Boolean readOnly = executionContext.getQueryOptions().isReadOnly();
@@ -86,6 +107,7 @@ public class JdbcSelectExecutorStandardImpl implements JdbcSelectExecutor {
 					executionContext,
 					rowTransformer,
 					domainResultType,
+					resultCountEstimate,
 					statementCreator,
 					resultsConsumer
 			);
@@ -103,6 +125,7 @@ public class JdbcSelectExecutorStandardImpl implements JdbcSelectExecutor {
 			ExecutionContext executionContext,
 			RowTransformer<R> rowTransformer,
 			Class<R> domainResultType,
+			int resultCountEstimate,
 			Function<String, PreparedStatement> statementCreator,
 			ResultsConsumer<T, R> resultsConsumer) {
 
@@ -110,7 +133,8 @@ public class JdbcSelectExecutorStandardImpl implements JdbcSelectExecutor {
 				jdbcSelect,
 				jdbcParameterBindings,
 				executionContext,
-				statementCreator
+				statementCreator,
+				resultCountEstimate
 		);
 		final JdbcValues jdbcValues = resolveJdbcValuesSource(
 				executionContext.getQueryIdentifier( deferredResultSetAccess.getFinalSql() ),
@@ -186,14 +210,7 @@ public class JdbcSelectExecutorStandardImpl implements JdbcSelectExecutor {
 		);
 
 		final RowReader<R> rowReader = ResultsHelper.createRowReader(
-				executionContext,
-				// If follow-on locking is used, we must omit the lock options here,
-				// because these lock options are only for Initializers.
-				// If we wouldn't omit this, the follow-on lock requests would be no-ops,
-				// because the EntityEntrys would already have the desired lock mode
-				deferredResultSetAccess.usesFollowOnLocking()
-						? LockOptions.NONE
-						: executionContext.getQueryOptions().getLockOptions(),
+				session.getFactory(),
 				rowTransformer,
 				domainResultType,
 				jdbcValues
@@ -235,12 +252,12 @@ public class JdbcSelectExecutorStandardImpl implements JdbcSelectExecutor {
 		return -1;
 	}
 
-	public JdbcValues resolveJdbcValuesSource(
+	private JdbcValues resolveJdbcValuesSource(
 			String queryIdentifier,
 			JdbcOperationQuerySelect jdbcSelect,
 			boolean canBeCached,
 			ExecutionContext executionContext,
-			ResultSetAccess resultSetAccess) {
+			DeferredResultSetAccess resultSetAccess) {
 		final SharedSessionContractImplementor session = executionContext.getSession();
 		final SessionFactoryImplementor factory = session.getFactory();
 		final boolean queryCacheEnabled = factory.getSessionFactoryOptions().isQueryCacheEnabled();
@@ -337,6 +354,7 @@ public class JdbcSelectExecutorStandardImpl implements JdbcSelectExecutor {
 					queryResultsCacheKey,
 					queryIdentifier,
 					executionContext.getQueryOptions(),
+					resultSetAccess.usesFollowOnLocking(),
 					jdbcValuesMapping,
 					metadataForCache,
 					executionContext

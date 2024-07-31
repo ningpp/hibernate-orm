@@ -15,7 +15,9 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.hibernate.Filter;
+import org.hibernate.Incubating;
 import org.hibernate.Internal;
+import org.hibernate.annotations.ConcreteProxy;
 import org.hibernate.boot.jaxb.mapping.JaxbEntity;
 import org.hibernate.engine.OptimisticLockStyle;
 import org.hibernate.engine.spi.LoadQueryInfluencers;
@@ -243,7 +245,6 @@ public interface EntityMappingType
 		return getDiscriminatorValue().toString();
 	}
 
-
 	default EntityMappingType getRootEntityDescriptor() {
 		final EntityMappingType superMappingType = getSuperMappingType();
 		if ( superMappingType == null ) {
@@ -325,6 +326,32 @@ public interface EntityMappingType
 	 * entity mappings within an inheritance hierarchy.
 	 */
 	EntityDiscriminatorMapping getDiscriminatorMapping();
+
+	/**
+	 * Returns {@code true} if this entity type's hierarchy is configured to return
+	 * {@linkplain ConcreteProxy concrete-typed} proxies.
+	 *
+	 * @see ConcreteProxy
+	 * @since 6.6
+	 */
+	@Incubating
+	default boolean isConcreteProxy() {
+		return false;
+	}
+
+	/**
+	 * If this entity is configured to return {@linkplain ConcreteProxy concrete-typed}
+	 * proxies, this method queries the entity table(s) do determine the concrete entity type
+	 * associated with the provided id and returns its persister. Otherwise, this method
+	 * simply returns this entity persister.
+	 *
+	 * @see #isConcreteProxy()
+	 * @since 6.6
+	 */
+	@Incubating
+	default EntityMappingType resolveConcreteProxyTypeForId(Object id, SharedSessionContractImplementor session) {
+		return this;
+	}
 
 	/**
 	 * Mapping details for the entity's version when using the
@@ -437,11 +464,8 @@ public interface EntityMappingType
 	/**
 	 * Visit the mappings, but limited to just attributes defined
 	 * in the targetType or its super-type(s) if any.
-	 *
-	 * @apiNote Passing {@code null} indicates that subclasses should be included.  This
-	 * matches legacy non-TREAT behavior and meets the need for EntityGraph processing
 	 */
-	default void visitAttributeMappings(Consumer<? super AttributeMapping> action, EntityMappingType targetType) {
+	default void visitAttributeMappings(Consumer<? super AttributeMapping> action) {
 		getAttributeMappings().forEach( action );
 	}
 
@@ -519,8 +543,8 @@ public interface EntityMappingType
 	// Loadable
 
 	@Override
-	default boolean isAffectedByEnabledFilters(LoadQueryInfluencers influencers) {
-		return getEntityPersister().isAffectedByEnabledFilters( influencers );
+	default boolean isAffectedByEnabledFilters(LoadQueryInfluencers influencers, boolean onlyApplyForLoadByKeyFilters) {
+		return getEntityPersister().isAffectedByEnabledFilters( influencers, onlyApplyForLoadByKeyFilters );
 	}
 
 	@Override
@@ -622,8 +646,16 @@ public interface EntityMappingType
 			TableGroup tableGroup,
 			boolean useQualifier,
 			Map<String, Filter> enabledFilters,
+			boolean onlyApplyLoadByKeyFilters,
 			SqlAstCreationState creationState) {
-		getEntityPersister().applyFilterRestrictions( predicateConsumer, tableGroup, useQualifier, enabledFilters, creationState );
+		getEntityPersister().applyFilterRestrictions(
+				predicateConsumer,
+				tableGroup,
+				useQualifier,
+				enabledFilters,
+				onlyApplyLoadByKeyFilters,
+				creationState
+		);
 	}
 
 	@Override
@@ -632,9 +664,18 @@ public interface EntityMappingType
 			TableGroup tableGroup,
 			boolean useQualifier,
 			Map<String, Filter> enabledFilters,
+			boolean onlyApplyLoadByKeyFilters,
 			Set<String> treatAsDeclarations,
 			SqlAstCreationState creationState) {
-		getEntityPersister().applyBaseRestrictions( predicateConsumer, tableGroup, useQualifier, enabledFilters, treatAsDeclarations, creationState );
+		getEntityPersister().applyBaseRestrictions(
+				predicateConsumer,
+				tableGroup,
+				useQualifier,
+				enabledFilters,
+				onlyApplyLoadByKeyFilters,
+				treatAsDeclarations,
+				creationState
+		);
 	}
 
 	@Override

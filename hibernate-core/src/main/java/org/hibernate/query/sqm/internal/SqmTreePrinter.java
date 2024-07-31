@@ -9,8 +9,8 @@ package org.hibernate.query.sqm.internal;
 import java.util.List;
 import java.util.Locale;
 
+import org.hibernate.metamodel.model.domain.DiscriminatorSqmPath;
 import org.hibernate.metamodel.model.domain.internal.AnyDiscriminatorSqmPath;
-import org.hibernate.metamodel.model.domain.internal.EntityDiscriminatorSqmPath;
 import org.hibernate.query.QueryLogging;
 import org.hibernate.query.sqm.SemanticQueryWalker;
 import org.hibernate.query.sqm.tree.SqmStatement;
@@ -26,6 +26,7 @@ import org.hibernate.query.sqm.tree.domain.SqmDerivedRoot;
 import org.hibernate.query.sqm.tree.domain.SqmEmbeddedValuedSimplePath;
 import org.hibernate.query.sqm.tree.domain.SqmEntityValuedSimplePath;
 import org.hibernate.query.sqm.tree.domain.SqmFkExpression;
+import org.hibernate.query.sqm.tree.domain.SqmFunctionPath;
 import org.hibernate.query.sqm.tree.domain.SqmIndexedCollectionAccessPath;
 import org.hibernate.query.sqm.tree.domain.SqmMapEntryReference;
 import org.hibernate.query.sqm.tree.domain.SqmElementAggregateFunction;
@@ -55,6 +56,7 @@ import org.hibernate.query.sqm.tree.expression.SqmFormat;
 import org.hibernate.query.sqm.tree.expression.SqmFunction;
 import org.hibernate.query.sqm.tree.expression.SqmHqlNumericLiteral;
 import org.hibernate.query.sqm.tree.expression.SqmLiteral;
+import org.hibernate.query.sqm.tree.expression.SqmLiteralEmbeddableType;
 import org.hibernate.query.sqm.tree.expression.SqmLiteralEntityType;
 import org.hibernate.query.sqm.tree.expression.SqmModifiedSubQueryExpression;
 import org.hibernate.query.sqm.tree.expression.SqmNamedParameter;
@@ -78,6 +80,8 @@ import org.hibernate.query.sqm.tree.from.SqmFrom;
 import org.hibernate.query.sqm.tree.from.SqmFromClause;
 import org.hibernate.query.sqm.tree.from.SqmQualifiedJoin;
 import org.hibernate.query.sqm.tree.from.SqmRoot;
+import org.hibernate.query.sqm.tree.insert.SqmConflictClause;
+import org.hibernate.query.sqm.tree.insert.SqmConflictUpdateAction;
 import org.hibernate.query.sqm.tree.insert.SqmInsertSelectStatement;
 import org.hibernate.query.sqm.tree.insert.SqmInsertValuesStatement;
 import org.hibernate.query.sqm.tree.insert.SqmValues;
@@ -330,10 +334,39 @@ public class SqmTreePrinter implements SemanticQueryWalker<Object> {
 								"into",
 								() -> statement.getInsertionTargetPaths().forEach( sqmPath -> sqmPath.accept( this ) )
 						);
+						if ( statement.getConflictClause() != null ) {
+							processStanza(
+									"on conflict",
+									() -> statement.getConflictClause().accept( this )
+							);
+						}
 					}
 			);
 		}
 
+		return null;
+	}
+
+	@Override
+	public Object visitConflictClause(SqmConflictClause<?> sqmConflictClause) {
+		if ( sqmConflictClause.getConstraintName() != null ) {
+			logWithIndentation( "[constraintName = %s]", sqmConflictClause.getConstraintName() );
+		}
+		else {
+			processStanza(
+					"constraint attributes",
+					() -> sqmConflictClause.getConstraintPaths().forEach( sqmPath -> sqmPath.accept( this ) )
+			);
+		}
+		final SqmConflictUpdateAction<?> updateAction = sqmConflictClause.getConflictAction();
+		if ( updateAction == null ) {
+			logWithIndentation( "do nothing" );
+		}
+		else {
+			logWithIndentation( "do update " );
+			visitSetClause( updateAction.getSetClause() );
+			visitWhereClause( updateAction.getWhereClause() );
+		}
 		return null;
 	}
 
@@ -691,7 +724,7 @@ public class SqmTreePrinter implements SemanticQueryWalker<Object> {
 	}
 
 	@Override
-	public Object visitDiscriminatorPath(EntityDiscriminatorSqmPath sqmPath) {
+	public Object visitDiscriminatorPath(DiscriminatorSqmPath<?> sqmPath) {
 		logWithIndentation( "-> [discriminator-path] - `%s`", sqmPath.getNavigablePath() );
 
 		return null;
@@ -772,6 +805,11 @@ public class SqmTreePrinter implements SemanticQueryWalker<Object> {
 
 	@Override
 	public Object visitEntityTypeLiteralExpression(SqmLiteralEntityType expression) {
+		return null;
+	}
+
+	@Override
+	public Object visitEmbeddableTypeLiteralExpression(SqmLiteralEmbeddableType<?> expression) {
 		return null;
 	}
 
@@ -1046,6 +1084,11 @@ public class SqmTreePrinter implements SemanticQueryWalker<Object> {
 
 	@Override
 	public Object visitIndexAggregateFunction(SqmIndexAggregateFunction path) {
+		return null;
+	}
+
+	@Override
+	public Object visitFunctionPath(SqmFunctionPath<?> functionPath) {
 		return null;
 	}
 

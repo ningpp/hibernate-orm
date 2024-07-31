@@ -9,6 +9,7 @@ package org.hibernate.type.descriptor.java;
 import java.io.Reader;
 import java.io.StringReader;
 import java.sql.Clob;
+import java.sql.NClob;
 import java.sql.Types;
 
 import org.hibernate.engine.jdbc.CharacterStream;
@@ -76,6 +77,9 @@ public class StringJavaType extends AbstractClassJavaType<String> {
 		if ( DataHelper.isNClob( type ) ) {
 			return (X) options.getLobCreator().createNClob( value );
 		}
+		if ( NClob.class.isAssignableFrom( type ) ) {
+			return (X) options.getLobCreator().createNClob( value );
+		}
 		if ( Clob.class.isAssignableFrom( type ) ) {
 			return (X) options.getLobCreator().createClob( value );
 		}
@@ -119,7 +123,7 @@ public class StringJavaType extends AbstractClassJavaType<String> {
 
 	@Override
 	public boolean isWider(JavaType<?> javaType) {
-		switch ( javaType.getJavaType().getTypeName() ) {
+		switch ( javaType.getTypeName() ) {
 			case "char":
 			case "char[]":
 			case "java.lang.Character":

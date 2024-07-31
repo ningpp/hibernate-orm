@@ -6,9 +6,14 @@
  */
 package org.hibernate.boot.model.internal;
 
+import jakarta.persistence.ForeignKey;
+import jakarta.persistence.MapsId;
+import jakarta.persistence.PrimaryKeyJoinColumn;
+import jakarta.persistence.PrimaryKeyJoinColumns;
 import org.hibernate.AnnotationException;
 import org.hibernate.annotations.Columns;
 import org.hibernate.annotations.Formula;
+import org.hibernate.annotations.FractionalSeconds;
 import org.hibernate.annotations.JoinColumnOrFormula;
 import org.hibernate.annotations.JoinColumnsOrFormulas;
 import org.hibernate.annotations.JoinFormula;
@@ -25,6 +30,8 @@ import jakarta.persistence.ManyToMany;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.OneToOne;
+
+import java.lang.annotation.Annotation;
 
 import static org.hibernate.boot.model.internal.AnnotatedColumn.buildColumnFromAnnotation;
 import static org.hibernate.boot.model.internal.AnnotatedColumn.buildColumnFromNoAnnotation;
@@ -85,6 +92,7 @@ class ColumnsBuilder {
 		if ( property.isAnnotationPresent( Column.class ) ) {
 			columns = buildColumnFromAnnotation(
 					property.getAnnotation( Column.class ),
+					property.getAnnotation( FractionalSeconds.class ),
 //					comment,
 					nullability,
 					propertyHolder,
@@ -107,6 +115,7 @@ class ColumnsBuilder {
 		else if ( property.isAnnotationPresent( Columns.class ) ) {
 			columns = buildColumnsFromAnnotations(
 					property.getAnnotation( Columns.class ).columns(),
+					null,
 //					comment,
 					nullability,
 					propertyHolder,
@@ -144,6 +153,7 @@ class ColumnsBuilder {
 		if ( columns == null && !property.isAnnotationPresent( ManyToMany.class ) ) {
 			//useful for collection of embedded elements
 			columns = buildColumnFromNoAnnotation(
+					property.getAnnotation( FractionalSeconds.class ),
 //					comment,
 					nullability,
 					propertyHolder,
@@ -262,6 +272,32 @@ class ColumnsBuilder {
 			}
 			return joinColumn;
 		}
+		else if ( property.isAnnotationPresent( MapsId.class ) ) {
+			// inelegant solution to HHH-16463, let the PrimaryKeyJoinColumn
+			// masquerade as a regular JoinColumn (when a @OneToOne maps to
+			// the primary key of the child table, it's more elegant and more
+			// spec-compliant to map the association with @PrimaryKeyJoinColumn)
+			if ( property.isAnnotationPresent( PrimaryKeyJoinColumn.class ) ) {
+				final PrimaryKeyJoinColumn column = property.getAnnotation( PrimaryKeyJoinColumn.class );
+				return new JoinColumn[] { new JoinColumnAdapter( column ) };
+			}
+			else if ( property.isAnnotationPresent( PrimaryKeyJoinColumns.class ) ) {
+				final PrimaryKeyJoinColumns primaryKeyJoinColumns = property.getAnnotation( PrimaryKeyJoinColumns.class );
+				final JoinColumn[] joinColumns = new JoinColumn[primaryKeyJoinColumns.value().length];
+				final PrimaryKeyJoinColumn[] columns = primaryKeyJoinColumns.value();
+				if ( columns.length == 0 ) {
+					throw new AnnotationException( "Property '" + getPath( propertyHolder, inferredData)
+							+ "' has an empty '@PrimaryKeyJoinColumns' annotation" );
+				}
+				for ( int i = 0; i < columns.length; i++ ) {
+					joinColumns[i] = new JoinColumnAdapter( columns[i] );
+				}
+				return joinColumns;
+			}
+			else {
+				return null;
+			}
+		}
 		else {
 			return null;
 		}
@@ -284,4 +320,62 @@ class ColumnsBuilder {
 		}
 	}
 
+	@SuppressWarnings("ClassExplicitlyAnnotation")
+	private static final class JoinColumnAdapter implements JoinColumn {
+		private final PrimaryKeyJoinColumn column;
+
+		public JoinColumnAdapter(PrimaryKeyJoinColumn column) {
+			this.column = column;
+		}
+
+		@Override
+		public String name() {
+			return column.name();
+		}
+
+		@Override
+		public String referencedColumnName() {
+			return column.referencedColumnName();
+		}
+
+		@Override
+		public boolean unique() {
+			return false;
+		}
+
+		@Override
+		public boolean nullable() {
+			return false;
+		}
+
+		@Override
+		public boolean insertable() {
+			return false;
+		}
+
+		@Override
+		public boolean updatable() {
+			return false;
+		}
+
+		@Override
+		public String columnDefinition() {
+			return column.columnDefinition();
+		}
+
+		@Override
+		public String table() {
+			return "";
+		}
+
+		@Override
+		public ForeignKey foreignKey() {
+			return column.foreignKey();
+		}
+
+		@Override
+		public Class<? extends Annotation> annotationType() {
+			return JoinColumn.class;
+		}
+	}
 }

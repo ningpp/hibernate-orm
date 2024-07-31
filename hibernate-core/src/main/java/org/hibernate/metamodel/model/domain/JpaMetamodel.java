@@ -7,18 +7,20 @@
 package org.hibernate.metamodel.model.domain;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import jakarta.persistence.metamodel.EmbeddableType;
 import jakarta.persistence.metamodel.EntityType;
 import jakarta.persistence.metamodel.ManagedType;
 
 import jakarta.persistence.metamodel.Metamodel;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.hibernate.Incubating;
 import org.hibernate.graph.spi.RootGraphImplementor;
 import org.hibernate.jpa.spi.JpaCompliance;
 import org.hibernate.metamodel.MappingMetamodel;
 import org.hibernate.service.ServiceRegistry;
+import org.hibernate.type.descriptor.java.EnumJavaType;
+import org.hibernate.type.descriptor.java.JavaType;
 import org.hibernate.type.spi.TypeConfiguration;
 
 /**
@@ -48,9 +50,19 @@ public interface JpaMetamodel extends Metamodel {
 	// Extended features
 
 	/**
+	 * Access to a managed type through its name
+	 */
+	<X> ManagedDomainType<X> managedType(String typeName);
+
+	/**
 	 * Access to an entity supporting Hibernate's entity-name feature
 	 */
 	<X> EntityDomainType<X> entity(String entityName);
+
+	/**
+	 * Access to an embeddable type from FQN
+	 */
+	<X> EmbeddableDomainType<X> embeddable(String embeddableName);
 
 	/**
 	 * Specialized handling for resolving entity-name references in
@@ -78,12 +90,15 @@ public interface JpaMetamodel extends Metamodel {
 
 	String qualifyImportableName(String queryName);
 
-	/**
-	 * Returns a map that gives access to the enum literal expressions that can be used in queries.
-	 * The key is the shorthand enum literal. The value is a map, from enum class to the actual enum value.
-	 * This is needed for parsing shorthand enum literals that don't use FQNs.
-	 */
-	Map<String, Map<Class<?>, Enum<?>>> getAllowedEnumLiteralTexts();
+	@Nullable Set<String> getEnumTypesForValue(String enumValue);
+
+	EnumJavaType<?> getEnumType(String className);
+
+	<E extends Enum<E>> E enumValue(EnumJavaType<E> enumType, String enumValueName);
+
+	JavaType<?> getJavaConstantType(String className, String fieldName);
+
+	<T> T getJavaConstant(String className, String fieldName);
 
 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 	// Covariant returns

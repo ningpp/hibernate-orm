@@ -6,6 +6,7 @@
  */
 package org.hibernate.sql.results.graph.embeddable.internal;
 
+import org.hibernate.internal.util.NullnessUtil;
 import org.hibernate.metamodel.mapping.EmbeddableMappingType;
 import org.hibernate.metamodel.mapping.EmbeddableValuedModelPart;
 import org.hibernate.metamodel.mapping.SelectableMapping;
@@ -26,8 +27,10 @@ import org.hibernate.sql.results.graph.DomainResultAssembler;
 import org.hibernate.sql.results.graph.DomainResultCreationState;
 import org.hibernate.sql.results.graph.Fetch;
 import org.hibernate.sql.results.graph.FetchParent;
-import org.hibernate.sql.results.graph.FetchParentAccess;
-import org.hibernate.sql.results.graph.embeddable.EmbeddableInitializer;
+import org.hibernate.sql.results.graph.Initializer;
+import org.hibernate.sql.results.graph.InitializerParent;
+import org.hibernate.sql.results.graph.InitializerProducer;
+import org.hibernate.sql.results.graph.basic.BasicFetch;
 import org.hibernate.sql.results.graph.embeddable.EmbeddableResult;
 import org.hibernate.sql.results.graph.embeddable.EmbeddableResultGraphNode;
 import org.hibernate.sql.results.graph.internal.ImmutableFetchList;
@@ -43,39 +46,39 @@ import org.hibernate.type.spi.TypeConfiguration;
  */
 public class AggregateEmbeddableResultImpl<T> extends AbstractFetchParent implements EmbeddableResultGraphNode,
 		DomainResult<T>,
-		EmbeddableResult<T> {
+		EmbeddableResult<T>,
+		InitializerProducer<AggregateEmbeddableResultImpl<T>> {
 	private final String resultVariable;
 	private final boolean containsAnyNonScalars;
-	private final NavigablePath initializerNavigablePath;
 	private final SqlSelection aggregateSelection;
 	private final EmbeddableMappingType fetchContainer;
+	private final BasicFetch<?> discriminatorFetch;
 
 	public AggregateEmbeddableResultImpl(
 			NavigablePath navigablePath,
 			EmbeddableValuedModelPart embeddedPartDescriptor,
 			String resultVariable,
 			DomainResultCreationState creationState) {
-		super( navigablePath );
-		this.fetchContainer = embeddedPartDescriptor.getEmbeddableTypeDescriptor();
-		this.resultVariable = resultVariable;
 		/*
 			An `{embeddable_result}` sub-path is created for the corresponding initializer to differentiate it from a fetch-initializer if this embedded is also fetched.
 			The Jakarta Persistence spec says that any embedded value selected in the result should not be part of the state of any managed entity.
 			Using this `{embeddable_result}` sub-path avoids this situation.
 		*/
-		this.initializerNavigablePath = navigablePath.append( "{embeddable_result}" );
+		super( navigablePath.append( "{embeddable_result}" ) );
+		this.fetchContainer = embeddedPartDescriptor.getEmbeddableTypeDescriptor();
+		this.resultVariable = resultVariable;
 
 		final SqlAstCreationState sqlAstCreationState = creationState.getSqlAstCreationState();
 		final FromClauseAccess fromClauseAccess = sqlAstCreationState.getFromClauseAccess();
 
 		final TableGroup tableGroup = fromClauseAccess.resolveTableGroup(
-				navigablePath,
+				getNavigablePath(),
 				np -> {
 					final EmbeddableValuedModelPart embeddedValueMapping = embeddedPartDescriptor.getEmbeddableTypeDescriptor()
 							.getEmbeddedValueMapping();
-					final TableGroup tg = fromClauseAccess.findTableGroup( navigablePath.getParent() );
+					final TableGroup tg = fromClauseAccess.findTableGroup( NullnessUtil.castNonNull( np.getParent() ).getParent() );
 					final TableGroupJoin tableGroupJoin = embeddedValueMapping.createTableGroupJoin(
-							navigablePath,
+							np,
 							tg,
 							resultVariable,
 							null,
@@ -103,6 +106,7 @@ public class AggregateEmbeddableResultImpl<T> extends AbstractFetchParent implem
 				null,
 				typeConfiguration
 		);
+		this.discriminatorFetch = creationState.visitEmbeddableDiscriminatorFetch( this, true );
 		resetFetches( creationState.visitNestedFetches( this ) );
 		this.containsAnyNonScalars = determineIfContainedAnyScalars( getFetches() );
 	}
@@ -149,21 +153,29 @@ public class AggregateEmbeddableResultImpl<T> extends AbstractFetchParent implem
 
 	@Override
 	public DomainResultAssembler<T> createResultAssembler(
-			FetchParentAccess parentAccess,
+			InitializerParent<?> parent,
 			AssemblerCreationState creationState) {
-		final EmbeddableInitializer initializer = creationState.resolveInitializer(
-				initializerNavigablePath,
-				getReferencedModePart(),
-				() -> new AggregateEmbeddableResultInitializer(
-						parentAccess,
-						this,
-						creationState,
-						aggregateSelection
-				)
-		).asEmbeddableInitializer();
+		//noinspection unchecked
+		return new EmbeddableAssembler( creationState.resolveInitializer( this, parent, this ).asEmbeddableInitializer() );
+	}
 
-		assert initializer != null;
+	@Override
+	public Initializer<?> createInitializer(
+			AggregateEmbeddableResultImpl<T> resultGraphNode,
+			InitializerParent<?> parent,
+			AssemblerCreationState creationState) {
+		return resultGraphNode.createInitializer( parent, creationState );
+	}
 
-		return new EmbeddableAssembler( initializer );
+	@Override
+	public Initializer<?> createInitializer(InitializerParent<?> parent, AssemblerCreationState creationState) {
+		return new AggregateEmbeddableInitializerImpl(
+				this,
+				discriminatorFetch,
+				parent,
+				creationState,
+				true,
+				aggregateSelection
+		);
 	}
 }

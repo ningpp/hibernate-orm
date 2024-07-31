@@ -23,6 +23,7 @@ import org.hibernate.type.descriptor.java.spi.UnknownBasicJavaType;
 import org.hibernate.type.descriptor.jdbc.BasicBinder;
 import org.hibernate.type.descriptor.jdbc.BasicExtractor;
 import org.hibernate.type.descriptor.jdbc.AggregateJdbcType;
+import org.hibernate.type.descriptor.jdbc.StructJdbcType;
 import org.hibernate.type.spi.TypeConfiguration;
 
 /**
@@ -31,14 +32,14 @@ import org.hibernate.type.spi.TypeConfiguration;
  * To support UDTs, we require that a transform exists for the UDT that serializes from SQL to XML
  * and deserializes to SQL from UDT. This means that from the JDBC perspective, this is an XML type,
  * but the database models it internally as UDT.
- *
+ * <p>
  * The {@link org.hibernate.dialect.aggregate.DB2AggregateSupport} generates the functions and transforms for this
  * process automatically, but note that all of this is only used for functions and native queries.
  * By default, we select individual struct parts to avoid the encoding/decoding.
  *
  * @author Christian Beikov
  */
-public class DB2StructJdbcType implements AggregateJdbcType {
+public class DB2StructJdbcType implements StructJdbcType {
 
 	public static final DB2StructJdbcType INSTANCE = new DB2StructJdbcType();
 
@@ -82,6 +83,7 @@ public class DB2StructJdbcType implements AggregateJdbcType {
 		return embeddableMappingType;
 	}
 
+	@Override
 	public String getStructTypeName() {
 		return structTypeName;
 	}

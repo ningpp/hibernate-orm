@@ -9,11 +9,7 @@ package org.hibernate.sql.exec.spi;
 import java.sql.PreparedStatement;
 import java.util.List;
 import java.util.Set;
-import java.util.Spliterator;
-import java.util.Spliterators;
 import java.util.function.Function;
-import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 
 import org.hibernate.FlushMode;
 import org.hibernate.Incubating;
@@ -22,7 +18,6 @@ import org.hibernate.ScrollMode;
 import org.hibernate.graph.spi.AppliedGraph;
 import org.hibernate.query.ResultListTransformer;
 import org.hibernate.query.TupleTransformer;
-import org.hibernate.query.internal.ScrollableResultsIterator;
 import org.hibernate.query.spi.Limit;
 import org.hibernate.query.spi.QueryOptions;
 import org.hibernate.query.spi.QueryParameterBindings;
@@ -56,6 +51,55 @@ public interface JdbcSelectExecutor {
 			Function<String, PreparedStatement> statementCreator,
 			ResultsConsumer<T, R> resultsConsumer);
 
+	/**
+	 * @since 6.6
+	 */
+	default <T, R> T executeQuery(
+			JdbcOperationQuerySelect jdbcSelect,
+			JdbcParameterBindings jdbcParameterBindings,
+			ExecutionContext executionContext,
+			RowTransformer<R> rowTransformer,
+			Class<R> domainResultType,
+			int resultCountEstimate,
+			ResultsConsumer<T, R> resultsConsumer) {
+		return executeQuery(
+				jdbcSelect,
+				jdbcParameterBindings,
+				executionContext,
+				rowTransformer,
+				domainResultType,
+				resultCountEstimate,
+				sql -> executionContext.getSession()
+						.getJdbcCoordinator()
+						.getStatementPreparer()
+						.prepareQueryStatement( sql, false, null ),
+				resultsConsumer
+		);
+	}
+
+	/**
+	 * @since 6.6
+	 */
+	default <T, R> T executeQuery(
+			JdbcOperationQuerySelect jdbcSelect,
+			JdbcParameterBindings jdbcParameterBindings,
+			ExecutionContext executionContext,
+			RowTransformer<R> rowTransformer,
+			Class<R> domainResultType,
+			int resultCountEstimate,
+			Function<String, PreparedStatement> statementCreator,
+			ResultsConsumer<T, R> resultsConsumer) {
+		return executeQuery(
+				jdbcSelect,
+				jdbcParameterBindings,
+				executionContext,
+				rowTransformer,
+				domainResultType,
+				statementCreator,
+				resultsConsumer
+		);
+	}
+
 	default <R> List<R> list(
 			JdbcOperationQuerySelect jdbcSelect,
 			JdbcParameterBindings jdbcParameterBindings,
@@ -72,6 +116,28 @@ public interface JdbcSelectExecutor {
 			RowTransformer<R> rowTransformer,
 			Class<R> requestedJavaType,
 			ListResultsConsumer.UniqueSemantic uniqueSemantic) {
+		return list(
+				jdbcSelect,
+				jdbcParameterBindings,
+				executionContext,
+				rowTransformer,
+				requestedJavaType,
+				uniqueSemantic,
+				-1
+		);
+	}
+
+	/**
+	 * @since 6.6
+	 */
+	default <R> List<R> list(
+			JdbcOperationQuerySelect jdbcSelect,
+			JdbcParameterBindings jdbcParameterBindings,
+			ExecutionContext executionContext,
+			RowTransformer<R> rowTransformer,
+			Class<R> requestedJavaType,
+			ListResultsConsumer.UniqueSemantic uniqueSemantic,
+			int resultCountEstimate) {
 		// Only do auto flushing for top level queries
 		return executeQuery(
 				jdbcSelect,
@@ -79,10 +145,7 @@ public interface JdbcSelectExecutor {
 				executionContext,
 				rowTransformer,
 				requestedJavaType,
-				sql -> executionContext.getSession()
-						.getJdbcCoordinator()
-						.getStatementPreparer()
-						.prepareQueryStatement( sql, false, null ),
+				resultCountEstimate,
 				ListResultsConsumer.instance( uniqueSemantic )
 		);
 	}
@@ -93,17 +156,30 @@ public interface JdbcSelectExecutor {
 			JdbcParameterBindings jdbcParameterBindings,
 			ExecutionContext executionContext,
 			RowTransformer<R> rowTransformer) {
+		return scroll( jdbcSelect, scrollMode, jdbcParameterBindings, executionContext, rowTransformer, -1 );
+	}
+
+	/**
+	 * @since 6.6
+	 */
+	default <R> ScrollableResultsImplementor<R> scroll(
+			JdbcOperationQuerySelect jdbcSelect,
+			ScrollMode scrollMode,
+			JdbcParameterBindings jdbcParameterBindings,
+			ExecutionContext executionContext,
+			RowTransformer<R> rowTransformer,
+			int resultCountEstimate) {
 		return executeQuery(
 				jdbcSelect,
 				jdbcParameterBindings,
 				getScrollContext( executionContext ),
 				rowTransformer,
 				null,
-				sql -> executionContext.getSession().getJdbcCoordinator().getStatementPreparer().prepareQueryStatement(
-						sql,
-						false,
-						scrollMode
-				),
+				resultCountEstimate,
+				sql -> executionContext.getSession()
+						.getJdbcCoordinator()
+						.getStatementPreparer()
+						.prepareQueryStatement( sql, false, scrollMode ),
 				ScrollableResultsConsumer.instance()
 		);
 	}

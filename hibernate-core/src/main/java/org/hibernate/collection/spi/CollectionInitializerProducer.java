@@ -11,8 +11,8 @@ import org.hibernate.LockMode;
 import org.hibernate.metamodel.mapping.PluralAttributeMapping;
 import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.results.graph.AssemblerCreationState;
-import org.hibernate.sql.results.graph.DomainResultAssembler;
-import org.hibernate.sql.results.graph.FetchParentAccess;
+import org.hibernate.sql.results.graph.DomainResult;
+import org.hibernate.sql.results.graph.InitializerParent;
 import org.hibernate.sql.results.graph.collection.CollectionInitializer;
 
 /**
@@ -25,28 +25,30 @@ import org.hibernate.sql.results.graph.collection.CollectionInitializer;
 @Incubating
 @FunctionalInterface
 public interface CollectionInitializerProducer {
+
 	/**
 	 * Create an initializer for the given attribute relative to the given
 	 * navigable path.
 	 *
 	 * @param navigablePath the navigable path
 	 * @param attribute the attribute
-	 * @param parentAccess  may be null to indicate that the initializer is
+	 * @param parent  may be null to indicate that the initializer is
 	 *        for a {@link org.hibernate.sql.results.graph.DomainResult}
 	 *        rather than a {@link org.hibernate.sql.results.graph.Fetch}
-	 * @param collectionKeyAssembler allows creation of a
+	 * @param collectionKeyResult allows creation of a
 	 *        {@link org.hibernate.sql.results.graph.DomainResult} for
 	 *        either side of the collection foreign key
-	 * @param collectionValueKeyAssembler allows creation of a
+	 * @param collectionValueKeyResult allows creation of a
 	 *        {@link org.hibernate.sql.results.graph.DomainResult} for
 	 *        either side of the collection foreign key
 	 */
-	CollectionInitializer produceInitializer(
+	CollectionInitializer<?> produceInitializer(
 			NavigablePath navigablePath,
 			PluralAttributeMapping attribute,
-			FetchParentAccess parentAccess,
+			InitializerParent<?> parent,
 			LockMode lockMode,
-			DomainResultAssembler<?> collectionKeyAssembler,
-			DomainResultAssembler<?> collectionValueKeyAssembler,
+			DomainResult<?> collectionKeyResult,
+			DomainResult<?> collectionValueKeyResult,
+			boolean isResultInitializer,
 			AssemblerCreationState creationState);
 }
